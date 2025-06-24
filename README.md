@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # SmartBDX - Enterprise Data Ingestion Platform
 
 SmartBDX is a full-featured, production-quality frontend for an enterprise data ingestion platform that processes complex Excel bordereaux files in insurance/reinsurance.
@@ -129,3 +130,6 @@ npm start
 ## License
 
 [MIT](LICENSE)
+=======
+# SmartBDX
+>>>>>>> 2d89c9375c06a420330682278709392ab27a8751
