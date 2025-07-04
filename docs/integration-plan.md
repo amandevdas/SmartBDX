@@ -1,6 +1,25 @@
-# SmartBDX Integration Plan: Performance-Optimized Azure Architecture
+# SmartBDX Integration Plan: Performance-Optimized Azure Architecture with Databricks
 
-Based on your requirements for performance and scalability, with files already stored in Azure Blob Storage, I've designed an integration architecture that optimizes for processing 10-20 Excel files (5-50MB each) in parallel while leveraging your existing Azure infrastructure.
+Based on your requirements for performance and scalability, with files already stored in Azure Blob Storage and processed through Databricks, this integration architecture optimizes for processing 10-20 Excel files (5-50MB each) in parallel while leveraging your existing Azure infrastructure.
+
+## Updated Implementation Status
+
+The current implementation uses a direct Databricks integration approach with a robust fallback system:
+
+1. **Primary: Real Databricks API Integration**
+   - DBFS API for file listing
+   - Jobs API for sheet discovery and processing
+   - Direct connection to Databricks workspace
+
+2. **Fallback 1: Server-side Mock Data**
+   - Automatically activates when Databricks API calls fail
+   - Provides realistic bordereaux file examples
+   - Maintains application functionality during API outages
+
+3. **Fallback 2: Client-side Mock Data**
+   - Controlled via `NEXT_PUBLIC_USE_MOCK_DATA` environment variable
+   - Useful for development and testing
+   - Completely bypasses server-side API calls
 
 ## 1. Architecture Overview
 
@@ -65,26 +84,39 @@ graph TD
 
 ## 3. Integration Workflows
 
-### 3.1 File Discovery and Selection
+### 3.1 File Discovery and Sheet Selection
 
 ```mermaid
 sequenceDiagram
     participant Frontend as Next.js Frontend
-    participant API as Azure Functions API
-    participant Storage as Azure Blob Storage
-    participant Databricks as Databricks
+    participant API as Next.js API Routes
+    participant DBFS as Databricks DBFS API
+    participant Jobs as Databricks Jobs API
     
     Frontend->>API: GET /api/files
-    API->>Storage: List blobs in container
-    Storage->>API: Return file metadata
-    API->>Databricks: Get processing status for files
-    Databricks->>API: Return status information
-    API->>Frontend: Return combined file metadata with status
+    API->>DBFS: List files in volume path
     
-    Frontend->>API: GET /api/files/{fileId}/preview
-    API->>Storage: Get file content (limited preview)
-    Storage->>API: Return file content
-    API->>Frontend: Return formatted preview data
+    alt DBFS API Success
+        DBFS->>API: Return file metadata
+        API->>Frontend: Return file list
+    else DBFS API Failure
+        API->>Frontend: Return fallback mock files
+    end
+    
+    Frontend->>API: GET /api/files/{fileId}/sheets
+    API->>Jobs: Submit job to extract sheet names
+    Jobs->>API: Return job ID
+    
+    loop Until job completes or timeout
+        API->>Jobs: Check job status
+    end
+    
+    alt Job Success
+        Jobs->>API: Return sheet names
+        API->>Frontend: Return sheet list
+    else Job Failure
+        API->>Frontend: Return fallback mock sheets
+    end
 ```
 
 ### 3.2 Processing Selected Files
@@ -92,100 +124,101 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Frontend as Next.js Frontend
-    participant API as Azure Functions API
-    participant Databricks as Databricks Jobs API
-    participant Storage as Azure Blob Storage
-    participant Cosmos as Cosmos DB
-    participant SignalR as SignalR Service
+    participant API as Next.js API Routes
+    participant Jobs as Databricks Jobs API
     
     Frontend->>API: POST /api/process (with file/sheet selections)
-    API->>Databricks: Submit job with selected files/sheets
-    Databricks->>API: Return job ID
-    API->>Cosmos: Create job record with status="submitted"
-    API->>Frontend: Return job ID and initial status
     
-    Databricks->>Storage: Read selected files
-    Databricks->>Databricks: Process files with SmartBDX
-    Databricks->>Cosmos: Update job status="processing"
-    Cosmos->>SignalR: Trigger status update
-    SignalR->>Frontend: Push status update
+    alt Direct Databricks Integration
+        API->>Jobs: Submit job with selected files/sheets
+        Jobs->>API: Return job ID
+        API->>Frontend: Return job ID and initial status
+    else API Failure
+        API->>Frontend: Return fallback mock job ID
+    end
     
-    Databricks->>Cosmos: Store processing results
-    Databricks->>Cosmos: Update job status="completed"
-    Cosmos->>SignalR: Trigger completion notification
-    SignalR->>Frontend: Push completion notification
+    Frontend->>API: GET /api/status/{jobId}
+    API->>Jobs: Check job status
     
-    Frontend->>API: GET /api/jobs/{jobId}/results
-    API->>Cosmos: Get job results
-    Cosmos->>API: Return results data
-    API->>Frontend: Return formatted results
+    alt Job Status Available
+        Jobs->>API: Return current status
+        API->>Frontend: Return formatted status
+    else Status Check Failure
+        API->>Frontend: Return fallback mock status
+    end
 ```
 
 ## 4. Performance Optimizations
 
 ### 4.1 Parallel Processing in Databricks
-- Implement ThreadPoolExecutor for parallel file processing
-- Configure optimal thread count based on file sizes
+- Leverage Databricks' built-in parallel processing capabilities
+- Configure optimal cluster size based on file processing needs
 - Use thread-local storage for Azure OpenAI clients
 - Implement rate limiting to prevent API throttling
 
 ### 4.2 Efficient File Access
-- Use Spark for initial file access from Blob Storage
-- Implement memory-mapped file reading for large Excel files
-- Selectively load only required sheets
+- Use DBFS API for efficient file listing
+- Submit Databricks jobs for sheet name extraction
+- Selectively load only required sheets based on user selection
 - Implement chunked processing for very large files
 
-### 4.3 Optimized API Responses
-- Implement pagination for large result sets
-- Use response compression for faster data transfer
-- Cache frequently accessed metadata
-- Implement efficient JSON serialization
+### 4.3 Robust Fallback System
+- Implement three-tier fallback approach:
+  1. Primary: Real Databricks API integration
+  2. Fallback 1: Server-side mock data when API calls fail
+  3. Fallback 2: Client-side mock data when explicitly enabled
+- Provide realistic mock data for development and testing
+- Ensure graceful degradation during API outages
 
 ### 4.4 Frontend Optimizations
 - Use virtualized lists for displaying large file collections
-- Implement progressive loading of file previews
-- Use WebSockets for real-time status updates
+- Implement expandable rows for sheet selection
 - Optimize rendering of large data tables
+- Provide clear visual feedback on API status
 
-## 5. Implementation Roadmap
+## 5. Implementation Status
 
-### Phase 1: Core API Layer (2 weeks)
-- Set up Azure Functions app
-- Implement file listing and preview APIs
-- Create Databricks job submission endpoints
+### Phase 1: Direct Databricks Integration ✅
+- Implemented Next.js API routes for Databricks communication
+- Created file listing endpoint using DBFS API
+- Implemented sheet discovery using Jobs API
 - Set up basic status tracking
 
-### Phase 2: Databricks Integration (2 weeks)
-- Create Databricks notebooks for processing
-- Implement parallel processing optimizations
-- Set up job monitoring and status updates
-- Test with sample files
+### Phase 2: Robust Fallback System ✅
+- Implemented server-side fallback to mock data
+- Created realistic bordereaux file examples
+- Added environment variable control for mock data
+- Ensured graceful degradation during API outages
 
-### Phase 3: Frontend Integration (2 weeks)
-- Update API client in frontend
-- Implement real-time status updates
-- Enhance file selection UI
-- Add job monitoring views
+### Phase 3: Frontend Enhancement ✅
+- Updated API client in frontend
+- Implemented expandable rows for sheet selection
+- Enhanced file selection UI
+- Added comprehensive error handling
 
-### Phase 4: Performance Optimization (1 week)
-- Implement caching strategies
-- Optimize file access patterns
-- Add pagination for large result sets
-- Performance testing and tuning
+### Phase 4: Current Improvements ✅
+- Resolved Databricks API connectivity issues
+- Fixed Next.js API route bug with params in sheets route
+- Implemented proper error handling for API failures
+- Updated configuration to use correct warehouse ID
+- Created comprehensive documentation for Databricks integration
 
-### Phase 5: Testing and Deployment (1 week)
-- End-to-end testing
-- Load testing with realistic file sizes
-- Deployment to Azure production environment
-- Documentation and knowledge transfer
+### Phase 5: Future Work 📋
+- Add more comprehensive error handling
+- Implement unit tests for API routes
+- Optimize performance for large file sets
+- Add real-time status updates
 
 ## 6. Conclusion
 
-This integration plan provides a performance-optimized architecture for connecting your Next.js frontend with the Databricks-based SmartBDX backend. By leveraging Azure services like Functions, API Management, Cosmos DB, and SignalR, we can create a scalable solution that efficiently processes 10-20 Excel files (5-50MB each) in parallel.
+This integration plan provides a performance-optimized architecture for connecting your Next.js frontend directly with the Databricks-based SmartBDX backend. The implementation uses a robust three-tier approach that ensures reliability while maintaining optimal performance.
 
-The architecture is designed to:
-- Maximize performance through parallel processing
-- Provide real-time status updates to users
-- Efficiently handle file access from Azure Blob Storage
-- Scale to accommodate growing workloads
-- Integrate seamlessly with your existing Azure infrastructure
+The current architecture:
+- Maximizes performance through direct Databricks integration
+- Provides reliable operation with comprehensive fallback mechanisms
+- Efficiently handles file access from Databricks volumes
+- Scales to accommodate growing workloads
+- Integrates seamlessly with your existing Azure infrastructure
+- Maintains functionality even during API outages
+
+The three-tier fallback approach ensures that the application remains functional under all circumstances, providing a smooth user experience while leveraging the power of Databricks for processing complex bordereaux files.

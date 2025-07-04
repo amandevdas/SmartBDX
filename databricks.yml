@@ -1,0 +1,19 @@
+# This is a Databricks asset bundle definition for smartbdx.
+# The Databricks extension requires databricks.yml configuration file.
+# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
+
+bundle:
+  name: smartbdx
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-240276726538573.13.azuredatabricks.net
+
+  ## Optionally, there could be 'staging' or 'prod' targets here.
+  #
+  # prod:
+  #   workspace:
+  #     host: https://adb-240276726538573.13.azuredatabricks.net

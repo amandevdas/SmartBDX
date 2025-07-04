@@ -95,16 +95,24 @@ graph TD
 
 ```mermaid
 graph LR
-    A[User Interface] --> B[Custom Hooks]
-    B --> C[API Service]
-    C --> D[Backend API]
-    D --> C
-    C --> B
-    B --> A
-    
-    E[Auth Service] --> F[Azure AD]
-    F --> E
-    E --> B
+    subgraph "Frontend"
+        A[User Interface] --> B[Custom Hooks e.g., useSmartBDXApi]
+    end
+
+    subgraph "API Layer"
+        B --> C[API Routes e.g., /api/files]
+        C --> D[DatabricksClient Abstraction]
+    end
+
+    subgraph "Backend"
+        D -- "Jobs API" --> E[Databricks Workspace]
+    end
+
+    subgraph "Authentication"
+        F[Auth Service] --> G[Azure AD]
+        G --> F
+        F --> B
+    end
 ```
 
 ## 5. Page-by-Page Implementation Plan
@@ -152,13 +160,41 @@ graph LR
 
 ## 6. API Integration
 
-We'll create a service layer for API integration with endpoints:
+The API layer is designed around a few key endpoints that act as a gateway to the `DatabricksClient`.
 
-- `/api/files` - Get list of files
-- `/api/process` - Process selected files
-- `/api/status` - Get batch job status
-- `/api/mapping` - Get mapping suggestions
-- `/api/mapping/approve` - Approve/reject mappings
+- **`/api/databricks`**: A generic, powerful endpoint that executes specific operations on Databricks by taking an `operation` and `parameters` in the request body. This is the primary endpoint for most interactions.
+- **`/api/files`**: Lists files from the configured Databricks volume. It uses the `discover_files` operation via the `/api/databricks` endpoint and includes a caching layer for performance.
+- **`/api/files/status`**: Gets the processing status of all files, using the optimized `discover_files_with_sheets` operation.
+- **`/api/process`**: Submits an asynchronous processing job for a selection of files. It returns a `jobId` for status tracking.
+- **`/api/status/[jobId]`**: Polls for the status of an asynchronous job submitted via `/api/process`.
+
+### 6.1 Databricks Integration Architecture
+
+The integration is architected around a centralized `DatabricksClient` (`/src/lib/databricks-client.ts`), which provides a robust abstraction layer over the Databricks Jobs API.
+
+- **Centralized Client**: Instead of direct `fetch` calls in each API route, all routes instantiate and use the `DatabricksClient`. This client handles authentication, job submission, polling, error handling, and output retrieval.
+- **Unified Job**: All operations (e.g., `discover_files`, `process_files`) are funneled through a single, powerful Databricks job, identified by `SMARTBDX_API_JOB_ID`. The specific task is determined by the `operation` parameter.
+- **Asynchronous Workflow**: For long-running tasks like file processing, the API submits a job and returns a `jobId` immediately. The frontend is responsible for polling the `/api/status/[jobId]` endpoint to get updates.
+- **Robust Fallback System**:
+  1. **Primary**: Real-time integration with the Databricks API.
+  2. **Server-Side Fallback**: If a Databricks API call fails or times out, the API routes can serve mock data to ensure the frontend remains functional. This is controlled by `NEXT_PUBLIC_ALLOW_FALLBACK`.
+  3. **Client-Side Mocking**: For development and testing, setting `NEXT_PUBLIC_USE_MOCK_DATA=true` bypasses all server-side logic and serves mock data directly from the API routes.
+
+### 6.2 Environment Configuration
+
+The application uses environment variables to control API behavior:
+
+```
+# Toggle between real and mock data
+NEXT_PUBLIC_USE_MOCK_DATA=false
+
+# Databricks connection details
+DATABRICKS_HOST=https://your-workspace.azuredatabricks.net/
+DATABRICKS_TOKEN=your-token
+SMARTBDX_API_JOB_ID=your-job-id
+DATABRICKS_WAREHOUSE_ID=your-warehouse-id
+NEXT_PUBLIC_VOLUME_PATH=/Volumes/path/to/files/
+```
 
 ## 7. Authentication Implementation
 

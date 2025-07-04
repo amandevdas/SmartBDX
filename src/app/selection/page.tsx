@@ -1,353 +1,291 @@
-"use client";
+// src/app/selection/page.tsx
+'use client';
 
-import { useState, useEffect } from "react";
-import { Table, Button, Input, Space, Spin, notification, Select, Alert } from "antd";
-import { SearchOutlined, FileExcelOutlined, StarOutlined } from "@ant-design/icons";
-import type { ColumnsType } from "antd/es/table";
-import StatusBadge from "@/components/common/StatusBadge";
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
+import { Button, Table, Checkbox, Input, Space, message, Spin, Tooltip, Alert, Progress, Tabs } from 'antd';
+import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
+import { apiRequest } from '@/hooks/useApi';
+import type { FileItem, JobStatus, ProcessRequest } from '@/types/api';
+import type { ColumnsType } from 'antd/es/table';
+import { useAppContext } from '@/context/AppContext';
+import { SheetSelector } from '@/components/selection/SheetSelector';
 
-interface FileMeta {
-  id: string;
-  file_name: string;
-  status: "pending" | "processing" | "completed" | "failed";
-  last_modified: string;
-  size: number;
-  sheets: number;
-  sheetNames?: string[]; // Add sheet names array
-  selectedSheets?: string[]; // Track selected sheets
-}
+const { Search } = Input;
 
-const SelectionPage = () => {
-  const [files, setFiles] = useState<FileMeta[]>([]);
-  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [searchText, setSearchText] = useState("");
-  const [fileSheets, setFileSheets] = useState<Record<string, string[]>>({});
-  const [selectedSheets, setSelectedSheets] = useState<Record<string, string[]>>({});
+export default function SelectionPage() {
+  // Global State
+  const router = useRouter();
+  const {
+    isInitialFilesLoaded,
+    setInitialFilesLoaded,
+    files,
+    fetchFiles,
+    filesLoading,
+    filesError,
+    fileSheets,
+    addJob,
+  } = useAppContext();
 
+  // Local UI State
+  const [submitLoading, setSubmitLoading] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [showSlowLoadMessage, setShowSlowLoadMessage] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedSheets, setSelectedSheets] = useState<{[fileId: string]: string[]}>({});
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [expandedRowKeys, setExpandedRowKeys] = useState<React.Key[]>([]);
+
+  // Initial data fetch
   useEffect(() => {
-    setLoading(true);
-    // In a real implementation, fetch data from API
-    // fetch('/api/files')
-    //   .then((res) => res.json())
-    //   .then((data) => {
-    //     setFiles(data);
-    //     setLoading(false);
-    //   })
-    //   .catch(() => {
-    //     notification.error({ message: 'Failed to load files.' });
-    //     setLoading(false);
-    //   });
-    
-    // For demo purposes, simulate API call with mock data
-    setTimeout(() => {
-      const mockFiles: FileMeta[] = [
-        {
-          id: "1",
-          file_name: "Q1_2023_Claims.xlsx",
-          status: "completed",
-          last_modified: "2023-04-15",
-          size: 1024 * 25,
-          sheets: 3,
-          sheetNames: ["Claims", "Premiums", "Summary"]
-        },
-        {
-          id: "2",
-          file_name: "Q2_2023_Claims.xlsx",
-          status: "completed",
-          last_modified: "2023-07-20",
-          size: 1024 * 32,
-          sheets: 3,
-          sheetNames: ["Claims", "Premiums", "Summary"]
-        },
-        {
-          id: "3",
-          file_name: "Q3_2023_Claims.xlsx",
-          status: "processing",
-          last_modified: "2023-10-10",
-          size: 1024 * 28,
-          sheets: 3,
-          sheetNames: ["Claims", "Premiums", "Summary"]
-        },
-        {
-          id: "4",
-          file_name: "Q4_2023_Claims.xlsx",
-          status: "pending",
-          last_modified: "2024-01-05",
-          size: 1024 * 30,
-          sheets: 3,
-          sheetNames: ["Claims", "Premiums", "Summary"]
-        },
-        {
-          id: "5",
-          file_name: "Annual_Summary_2023.xlsx",
-          status: "failed",
-          last_modified: "2024-01-15",
-          size: 1024 * 45,
-          sheets: 5,
-          sheetNames: ["Claims", "Premiums", "Expenses", "Revenue", "Summary"]
-        },
-        {
-          id: "6",
-          file_name: "Policy_Renewals_2024.xlsx",
-          status: "pending",
-          last_modified: "2024-01-20",
-          size: 1024 * 38,
-          sheets: 4,
-          sheetNames: ["Policies", "Renewals", "Cancellations", "Summary"]
-        },
-        {
-          id: "7",
-          file_name: "Premium_Calculations_Q1_2024.xlsx",
-          status: "pending",
-          last_modified: "2024-02-01",
-          size: 1024 * 22,
-          sheets: 2,
-          sheetNames: ["Calculations", "Results"]
-        },
-      ];
-      
-      // Initialize fileSheets state
-      const sheetsMap: Record<string, string[]> = {};
-      mockFiles.forEach(file => {
-        if (file.sheetNames) {
-          sheetsMap[file.id] = file.sheetNames;
-        }
+    if (!isInitialFilesLoaded) {
+      fetchFiles(true).then(() => {
+        setInitialFilesLoaded(true);
       });
-      
-      setFiles(mockFiles);
-      setFileSheets(sheetsMap);
-      setLoading(false);
-    }, 1000);
+    }
+  }, [fetchFiles, isInitialFilesLoaded, setInitialFilesLoaded]);
+
+  // Slow loading message handler
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (filesLoading) {
+      timer = setTimeout(() => {
+        setShowSlowLoadMessage(true);
+      }, 5000);
+    } else {
+      setShowSlowLoadMessage(false);
+    }
+    return () => clearTimeout(timer);
+  }, [filesLoading]);
+
+  // UI Handlers
+  const handleRefreshClick = useCallback(() => {
+    fetchFiles(true);
+  }, [fetchFiles]);
+
+  const handleSheetSelection = useCallback((fileId: string, newSelection: string[]) => {
+    setSelectedSheets(prev => ({ ...prev, [fileId]: newSelection }));
   }, []);
 
-  
-  const handleSheetSelection = (fileId: string, selectedSheetNames: string[]) => {
-    setSelectedSheets(prev => ({
-      ...prev,
-      [fileId]: selectedSheetNames
-    }));
-  };
-  
-  const handleSelectAllSheets = (fileId: string) => {
-    const allSheets = fileSheets[fileId] || [];
-    setSelectedSheets(prev => ({
-      ...prev,
-      [fileId]: [...allSheets]
-    }));
-  };
+  const handleSelectFile = useCallback((fileId: string, checked: boolean) => {
+    setSelectedFiles(prev =>
+      checked ? [...prev, fileId] : prev.filter(id => id !== fileId)
+    );
+    if (!checked) {
+      setSelectedSheets(prev => {
+        const updated = { ...prev };
+        delete updated[fileId];
+        return updated;
+      });
+      setExpandedRowKeys(prev => prev.filter(key => key !== fileId));
+    }
+  }, []);
 
-  const handleProcess = () => {
-    // Prepare data with selected files and their selected sheets
-    const processData = selectedRowKeys.map(fileId => ({
-      fileId,
-      sheets: selectedSheets[fileId as string] || [] // If no sheets selected, include all
-    }));
-    
-    notification.success({
-      message: `Processing ${selectedRowKeys.length} files with selected sheets`
+  const filteredFiles = useMemo(() => {
+    return files.filter(file => {
+      const matchesSearch = file.name.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesStatus = statusFilter === 'all' || file.status === statusFilter;
+      return matchesSearch && matchesStatus;
     });
-    
-    // In a real implementation, call API to process files with selected sheets
-    // fetch('/api/process', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({ files: processData }),
-    // })
-    //   .then((res) => {
-    //     if (res.ok) {
-    //       notification.success({ message: 'Batch started!' });
-    //     } else {
-    //       notification.error({ message: 'Failed to start batch.' });
-    //     }
-    //   })
-    //   .catch(() => notification.error({ message: 'Error communicating with API.' }));
-    
-    console.log('Processing data:', processData);
-  };
+  }, [files, searchTerm, statusFilter]);
 
-  const filteredFiles = files.filter(file => 
-    file.file_name.toLowerCase().includes(searchText.toLowerCase())
-  );
+  const handleSelectAll = useCallback((checked: boolean) => {
+    if (checked) {
+      const selectableFiles = filteredFiles.filter(file => file.status === 'ready');
+      setSelectedFiles(selectableFiles.map(f => f.id));
+    } else {
+      setSelectedFiles([]);
+      setSelectedSheets({});
+      setExpandedRowKeys([]);
+    }
+  }, [filteredFiles]);
 
-  const columns: ColumnsType<FileMeta> = [
-    {
-      title: "",
-      key: "favorite",
-      width: 40,
-      render: () => (
-        <Button type="text" className="text-gray-400 hover:text-yellow-500">
-          <StarOutlined />
-        </Button>
-      ),
-    },
-    {
-      title: "File Name",
-      dataIndex: "file_name",
-      key: "file_name",
-      render: (text, record) => (
-        <div className="flex items-center py-2">
-          <FileExcelOutlined className="mr-3 text-green-600 text-lg" />
-          <div>
-            <div className="font-medium">{text}</div>
-            <div className="text-xs text-gray-500 mt-1">
-              {record.sheets} sheets • {(record.size / 1024).toFixed(2)} KB
-            </div>
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: "Status",
-      dataIndex: "status",
-      key: "status",
-      width: 120,
-      render: (status) => <StatusBadge status={status} />,
-      filters: [
-        { text: "Pending", value: "pending" },
-        { text: "Processing", value: "processing" },
-        { text: "Completed", value: "completed" },
-        { text: "Failed", value: "failed" },
-      ],
-      onFilter: (value, record) => record.status === value,
-    },
-    {
-      title: "Last Modified",
-      dataIndex: "last_modified",
-      key: "last_modified",
-      width: 120,
-      render: (date) => {
-        // Format date to be more Gmail-like
-        const dateObj = new Date(date);
-        const today = new Date();
-        const isToday = dateObj.toDateString() === today.toDateString();
+  // Job Submission
+  const submitJob = useCallback(async (processData: ProcessRequest): Promise<JobStatus> => {
+    setSubmitLoading(true);
+    setSubmitError(null);
+    try {
+      const response = await apiRequest<JobStatus>('/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(processData),
+      });
+      if (!response.jobId) {
+        throw new Error('Server did not return a job ID');
+      }
+      return response;
+    } catch (error: any) {
+      const errorMessage = error?.message || 'Failed to start processing.';
+      setSubmitError(errorMessage);
+      throw new Error(errorMessage);
+    } finally {
+      setSubmitLoading(false);
+    }
+  }, []);
+
+  const handleProcessFiles = useCallback(async () => {
+    if (selectedFiles.length === 0) {
+      message.warning('Please select at least one file.');
+      return;
+    }
+
+    // --- Validation Logic ---
+    for (const fileId of selectedFiles) {
+      const sheets = selectedSheets[fileId];
+      if (!sheets || sheets.length === 0) {
+        const file = files.find(f => f.id === fileId);
+        message.warning(`Please select at least one sheet for "${file?.name || fileId}".`);
         
-        if (isToday) {
-          return dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        } else {
-          return dateObj.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        // Expand the row to prompt user for selection
+        if (!expandedRowKeys.includes(fileId)) {
+          setExpandedRowKeys(prev => [...prev, fileId]);
         }
-      },
-      sorter: (a, b) => new Date(a.last_modified).getTime() - new Date(b.last_modified).getTime(),
+        return; // Stop the submission
+      }
+    }
+    // --- End Validation Logic ---
+
+    const processData: ProcessRequest = {
+      fileIds: selectedFiles,
+      sheetSelections: selectedSheets,
+      options: { priority: 'normal' },
+    };
+    try {
+      const result = await submitJob(processData);
+      message.success(`Processing started! Job ID: ${result.jobId}`);
+      addJob(result);
+      setSelectedFiles([]);
+      setSelectedSheets({});
+      setExpandedRowKeys([]);
+      router.push('/processing');
+    } catch (error) {
+      // Error is handled in submitJob
+    }
+  }, [selectedFiles, selectedSheets, files, expandedRowKeys, submitJob, router, addJob]);
+
+  // Memoized data for rendering
+  const columns: ColumnsType<FileItem> = useMemo(() => [
+    {
+      title: <Checkbox
+        checked={selectedFiles.length === filteredFiles.length && filteredFiles.length > 0}
+        indeterminate={selectedFiles.length > 0 && selectedFiles.length < filteredFiles.length}
+        onChange={(e) => handleSelectAll(e.target.checked)}
+      />,
+      dataIndex: 'select',
+      width: 50,
+      render: (_, record) => (
+        <Checkbox
+          checked={selectedFiles.includes(record.id)}
+          onChange={(e) => handleSelectFile(record.id, e.target.checked)}
+          disabled={record.status !== 'ready'}
+        />
+      ),
     },
-  ];
+    { title: 'File Name', dataIndex: 'name', key: 'name', sorter: (a, b) => a.name.localeCompare(b.name) },
+    { title: 'Status', dataIndex: 'status', key: 'status' },
+    { title: 'Size', dataIndex: 'size', key: 'size', render: (size) => `${(size / 1024 / 1024).toFixed(2)} MB` },
+    {
+      title: 'Last Modified',
+      dataIndex: 'lastModified',
+      key: 'lastModified',
+      render: (date: Date) => date ? new Date(date).toLocaleString() : '-',
+      sorter: (a, b) => (new Date(a.lastModified || 0).getTime()) - (new Date(b.lastModified || 0).getTime()),
+    },
+  ], [selectedFiles, filteredFiles, handleSelectAll, handleSelectFile]);
+
+  if (filesError) {
+    return <div className="p-6"><Alert message="Error Loading Files" description={filesError} type="error" showIcon /></div>;
+  }
 
   return (
-    <div className="bg-white rounded-lg">
-      <div className="flex justify-between items-center p-4 border-b border-gray-200">
-        <div className="flex items-center">
-          <h1 className="text-lg font-medium text-gray-700">Bordereaux Files</h1>
-          <span className="ml-2 text-sm text-gray-500">({files.length})</span>
-        </div>
-        <div className="flex items-center">
-          <Button
-            type="text"
-            icon={<SearchOutlined />}
-            className="mr-2"
-            onClick={() => {
-              // This would open a more advanced search dialog in a real app
-              notification.info({ message: "Advanced search would open here" });
-            }}
-          />
-          <Input
-            placeholder="Search in files"
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 200 }}
-            className="rounded-full bg-gray-100 border-0 hover:bg-gray-200 focus:bg-white focus:border-gray-300"
-          />
-        </div>
-      </div>
-      
-      <Spin spinning={loading}>
-        <Table
-          rowSelection={{
-            selectedRowKeys,
-            onChange: setSelectedRowKeys,
-            columnWidth: 48,
-            columnTitle: ' ',
-            renderCell: (checked, record, index, originNode) => {
-              return <div className="flex justify-center">{originNode}</div>;
-            }
-          }}
-          expandable={{
-            expandedRowRender: (record) => {
-              const fileId = record.id;
-              const sheets = fileSheets[fileId] || [];
-              
-              return (
-                <div className="py-3 pl-12 pr-4 bg-gray-50">
-                  <div className="font-medium mb-2 text-gray-700">Select Sheets:</div>
-                  <div className="flex items-center gap-4">
-                    <Select
-                      mode="multiple"
-                      style={{ width: '80%' }}
-                      placeholder="Select sheets to process"
-                      value={selectedSheets[fileId] || []}
-                      onChange={(values) => handleSheetSelection(fileId, values)}
-                      options={sheets.map(sheet => ({ label: sheet, value: sheet }))}
-                    />
-                    <Button
-                      type="default"
-                      size="small"
-                      onClick={() => handleSelectAllSheets(fileId)}
-                    >
-                      Select All
-                    </Button>
-                  </div>
-                </div>
-              );
-            },
-            rowExpandable: (record) => (fileSheets[record.id]?.length || 0) > 0,
-            expandIcon: ({ expanded, onExpand, record }) => (
-              expanded ? (
-                <Button type="text" size="small" onClick={e => onExpand(record, e)} className="mr-2">
-                  <span className="text-blue-600">−</span>
-                </Button>
-              ) : (
-                <Button type="text" size="small" onClick={e => onExpand(record, e)} className="mr-2">
-                  <span className="text-blue-600">+</span>
-                </Button>
-              )
-            )
-          }}
-          columns={columns}
-          dataSource={filteredFiles}
-          rowKey="id"
-          pagination={{ pageSize: 25 }}
-          className="gmail-style-table"
-          rowClassName={(record) => {
-            return selectedRowKeys.includes(record.id) ? 'bg-blue-50' : 'hover:bg-gray-50';
-          }}
-          size="middle"
-          showHeader={false}
-        />
-      </Spin>
-      
-      {selectedRowKeys.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-3 flex justify-between items-center shadow-md" style={{ marginLeft: '16rem' }}>
-          <div className="flex items-center">
-            <span className="font-medium mr-2">
-              {selectedRowKeys.length} selected
-            </span>
-            <Button type="text" onClick={() => setSelectedRowKeys([])}>
-              Clear selection
+    <React.Fragment>
+      <div className="p-6 bg-gray-50 min-h-full">
+        <header className="mb-6">
+          <h1 className="text-2xl font-bold text-gray-900">File Selection</h1>
+          <p className="text-gray-600">Select files and sheets for processing.</p>
+        </header>
+
+        <div className="mb-4 bg-white p-4 rounded-lg border border-gray-200">
+          <div className="flex justify-between items-center">
+            <Space>
+              <Search
+                placeholder="Search files..."
+                allowClear
+                style={{ width: 300 }}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+              <Button icon={<ReloadOutlined />} onClick={handleRefreshClick} loading={filesLoading}>
+                Refresh
+              </Button>
+            </Space>
+            <Button
+              type="primary"
+              size="large"
+              disabled={selectedFiles.length === 0}
+              loading={submitLoading}
+              onClick={handleProcessFiles}
+            >
+              Process Selected ({selectedFiles.length})
             </Button>
           </div>
-          
-          <Button
-            type="primary"
-            onClick={handleProcess}
-            size="middle"
-            className="bg-blue-600 hover:bg-blue-700"
-          >
-            Process Selected ({selectedRowKeys.length})
-          </Button>
+        </div>
+
+        <Tabs
+          activeKey={statusFilter}
+          onChange={setStatusFilter}
+          className="mb-4"
+          items={[
+            { key: 'all', label: `All (${files.length})` },
+            { key: 'ready', label: `Ready (${files.filter(f => f.status === 'ready').length})` },
+            { key: 'processing', label: `Processing (${files.filter(f => f.status === 'processing').length})` },
+            { key: 'completed', label: `Completed (${files.filter(f => f.status === 'completed').length})` },
+            { key: 'error', label: `Error (${files.filter(f => f.status === 'error').length})` },
+          ]}
+        />
+
+        {submitError && <Alert message="Processing Error" description={submitError} type="error" showIcon closable className="mb-4" />}
+
+        <div className="bg-white p-4 rounded-lg border border-gray-200">
+          <Spin spinning={filesLoading} tip="Loading files...">
+            <Table
+              columns={columns}
+              dataSource={filteredFiles}
+              rowKey="id"
+              pagination={{ showSizeChanger: true, showQuickJumper: true, pageSize: 20 }}
+              scroll={{ x: 800 }}
+              expandable={{
+                expandedRowKeys,
+                onExpand: (expanded, record) => {
+                  const keys = expanded ? [...expandedRowKeys, record.id] : expandedRowKeys.filter(k => k !== record.id);
+                  setExpandedRowKeys(keys);
+                },
+                expandedRowRender: (record) => (
+                  <SheetSelector
+                    allSheets={fileSheets[record.id] || []}
+                    selectedSheets={selectedSheets[record.id] || []}
+                    onSelectionChange={(newSelection) => handleSheetSelection(record.id, newSelection)}
+                  />
+                ),
+                rowExpandable: (record) => (fileSheets[record.id] || []).length > 0,
+              }}
+            />
+          </Spin>
+        </div>
+      </div>
+
+      {showSlowLoadMessage && filesLoading && (
+        <div className="fixed bottom-4 right-4 z-50">
+          <Alert
+            message="Databricks cluster is starting..."
+            description="This may take a few minutes. Please wait."
+            type="info"
+            showIcon
+            closable
+            onClose={() => setShowSlowLoadMessage(false)}
+          />
         </div>
       )}
-      
-    </div>
+    </React.Fragment>
   );
-};
-
-export default SelectionPage;
+}

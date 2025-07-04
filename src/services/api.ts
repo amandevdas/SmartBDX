@@ -1,196 +1,213 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useAuth } from './auth';
+// src/services/api.ts
+import { apiRequest } from '../utils/apiHelpers';
+import { FileItem, JobStatus, ProcessRequest } from '../types/api';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
-// For demo purposes, we'll use mock data
-const USE_MOCK_DATA = true;
-
 /**
- * API client for making requests to the backend
+ * Enhanced API client with better error handling and type safety
  */
 export const apiClient = {
-  /**
-   * Make a GET request to the API
-   * @param endpoint - API endpoint
-   * @param options - Request options
-   * @returns Promise with response data
-   */
-  async get<T>(endpoint: string, options = {}): Promise<T> {
-    if (USE_MOCK_DATA) {
-      return this.getMockResponse(endpoint) as Promise<T>;
-    }
-    
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        ...await this.getAuthHeaders(),
-      },
-      ...options,
-    });
-    
-    if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
-    }
-    
-    return response.json();
+  // File operations
+  async getFiles(): Promise<FileItem[]> {
+    return apiRequest<FileItem[]>('/files');
   },
-  
-  /**
-   * Make a POST request to the API
-   * @param endpoint - API endpoint
-   * @param data - Request body data
-   * @param options - Request options
-   * @returns Promise with response data
-   */
-  async post<T>(endpoint: string, data: any, options = {}): Promise<T> {
-    if (USE_MOCK_DATA) {
-      return this.getMockResponse(endpoint, data) as Promise<T>;
-    }
-    
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+
+  async getFilePreview(fileId: string): Promise<any> {
+    return apiRequest(`/files/${fileId}/preview`);
+  },
+
+  async getFileSheets(fileId: string): Promise<string[]> {
+    return apiRequest<string[]>(`/files/${fileId}/sheets`);
+  },
+
+  // Processing operations
+  async submitProcessingJob(request: ProcessRequest): Promise<{ jobId: string; status: string }> {
+    return apiRequest('/process', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...await this.getAuthHeaders(),
-      },
-      body: JSON.stringify(data),
-      ...options,
+      body: JSON.stringify(request),
     });
-    
+  },
+
+  async getJobStatus(jobId: string): Promise<JobStatus> {
+    return apiRequest<JobStatus>(`/status/${jobId}`);
+  },
+
+  async getAllJobs(): Promise<JobStatus[]> {
+    return apiRequest<JobStatus[]>('/jobs');
+  },
+
+  // Mapping operations
+  async getMappingSuggestions(fileId: string): Promise<any> {
+    return apiRequest(`/mapping/${fileId}`);
+  },
+
+  async approveMappings(fileId: string, mappings: any): Promise<void> {
+    return apiRequest(`/mapping/${fileId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(mappings),
+    });
+  },
+
+  // Batch operations
+  async getBatchHistory(): Promise<any[]> {
+    return apiRequest('/batches');
+  },
+
+  async downloadResults(jobId: string): Promise<Blob> {
+    const response = await fetch(`${API_BASE_URL}/results/${jobId}/download`);
     if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+      throw new Error(`Download failed: ${response.statusText}`);
     }
-    
-    return response.json();
-  },
-  
-  /**
-   * Get authentication headers for API requests
-   * @returns Promise with headers object
-   */
-  async getAuthHeaders(): Promise<Record<string, string>> {
-    const { getToken } = useAuth();
-    const token = getToken();
-    
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  },
-  
-  /**
-   * Get mock response for API requests
-   * @param endpoint - API endpoint
-   * @param requestData - Request body data
-   * @returns Promise with mock response data
-   */
-  getMockResponse(endpoint: string, requestData?: any): Promise<any> {
-    // This would be replaced with more comprehensive mock data in a real implementation
-    const mockData: Record<string, any> = {
-      '/api/files': [
-        { id: "1", file_name: "Q1_2023_Claims.xlsx", status: "completed", last_modified: "2023-04-15", size: 1024 * 25, sheets: 3 },
-        { id: "2", file_name: "Q2_2023_Claims.xlsx", status: "completed", last_modified: "2023-07-20", size: 1024 * 32, sheets: 3 },
-        { id: "3", file_name: "Q3_2023_Claims.xlsx", status: "processing", last_modified: "2023-10-10", size: 1024 * 28, sheets: 3 },
-        { id: "4", file_name: "Q4_2023_Claims.xlsx", status: "pending", last_modified: "2024-01-05", size: 1024 * 30, sheets: 3 },
-        { id: "5", file_name: "Annual_Summary_2023.xlsx", status: "failed", last_modified: "2024-01-15", size: 1024 * 45, sheets: 5 },
-        { id: "6", file_name: "Policy_Renewals_2024.xlsx", status: "pending", last_modified: "2024-01-20", size: 1024 * 38, sheets: 4 },
-        { id: "7", file_name: "Premium_Calculations_Q1_2024.xlsx", status: "pending", last_modified: "2024-02-01", size: 1024 * 22, sheets: 2 },
-      ],
-      '/api/status': [
-        {
-          id: "batch-001",
-          status: "processing",
-          startTime: new Date(Date.now() - 1000 * 60 * 15).toISOString(), // 15 minutes ago
-          completedFiles: 12,
-          totalFiles: 20,
-          errors: 0,
-          parallelism: 4,
-          estimatedTimeRemaining: 600, // 10 minutes
-        },
-        {
-          id: "batch-002",
-          status: "paused",
-          startTime: new Date(Date.now() - 1000 * 60 * 45).toISOString(), // 45 minutes ago
-          completedFiles: 5,
-          totalFiles: 15,
-          errors: 2,
-          parallelism: 2,
-        },
-        {
-          id: "batch-003",
-          status: "completed",
-          startTime: new Date(Date.now() - 1000 * 60 * 120).toISOString(), // 2 hours ago
-          completedFiles: 10,
-          totalFiles: 10,
-          errors: 0,
-          parallelism: 4,
-        },
-      ],
-      '/api/mapping': [
-        {
-          id: "file-001",
-          file_name: "Q1_2023_Claims.xlsx",
-          status: "pending",
-          confidence: 0.85,
-          column_count: 12,
-          mapped_columns: 10,
-          last_modified: "2023-04-15",
-        },
-        {
-          id: "file-002",
-          file_name: "Q2_2023_Claims.xlsx",
-          status: "pending",
-          confidence: 0.92,
-          column_count: 12,
-          mapped_columns: 12,
-          last_modified: "2023-07-20",
-        },
-        {
-          id: "file-003",
-          file_name: "Q3_2023_Claims.xlsx",
-          status: "approved",
-          confidence: 0.78,
-          column_count: 12,
-          mapped_columns: 11,
-          last_modified: "2023-10-10",
-        },
-      ],
-    };
-    
-    // Handle POST requests to specific endpoints
-    if (requestData && endpoint === '/api/process') {
-      return Promise.resolve({ success: true, batchId: `batch-${Date.now()}` });
-    }
-    
-    return Promise.resolve(mockData[endpoint] || { message: 'No mock data available for this endpoint' });
+    return response.blob();
   },
 };
 
 /**
- * Custom hook for making API requests
- * @param endpoint - API endpoint
- * @returns Object with data, loading state, error, and refetch function
+ * Legacy compatibility wrapper - can be removed after migration
+ * @deprecated Use apiClient instead
  */
-export function useApi<T>(endpoint: string) {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-  
-  const fetchData = useCallback(async () => {
-    try {
-      setLoading(true);
-      const response = await apiClient.get<T>(endpoint);
-      setData(response);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to fetch data'));
-    } finally {
-      setLoading(false);
+export const legacyApiClient = {
+  async get<T>(endpoint: string, options = {}): Promise<T> {
+    console.warn('Using legacy API client. Migrate to new apiClient.');
+    return apiRequest<T>(endpoint, { ...options, method: 'GET' });
+  },
+
+  async post<T>(endpoint: string, data: any, options = {}): Promise<T> {
+    console.warn('Using legacy API client. Migrate to new apiClient.');
+    return apiRequest<T>(endpoint, {
+      ...options,
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  // Mock response helper for backward compatibility
+  getMockResponse(endpoint: string, requestData?: any): any {
+    // File listing mock
+    if (endpoint === '/api/files') {
+      return [
+        {
+          id: 'file1',
+          name: 'bordereaux_sample_1.xlsx',
+          status: 'ready',
+          size: 1024000,
+          lastModified: new Date('2024-01-15'),
+        },
+        {
+          id: 'file2', 
+          name: 'reinsurance_data_q4.xlsx',
+          status: 'processing',
+          size: 2048000,
+          lastModified: new Date('2024-01-16'),
+        },
+        {
+          id: 'file3',
+          name: 'claims_report_2024.xlsx', 
+          status: 'completed',
+          size: 3072000,
+          lastModified: new Date('2024-01-17'),
+        },
+        {
+          id: 'file4',
+          name: 'premium_calculations.xlsx',
+          status: 'error',
+          size: 1536000,
+          lastModified: new Date('2024-01-18'),
+        },
+      ];
     }
-  }, [endpoint]);
-  
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-  
-  return { data, loading, error, refetch: fetchData };
-}
+
+    // Job status mock
+    if (endpoint.includes('/api/status/')) {
+      const jobId = endpoint.split('/').pop();
+      return {
+        jobId,
+        status: Math.random() > 0.3 ? 'processing' : 'completed',
+        progress: Math.floor(Math.random() * 100),
+        message: 'Processing headers and mapping columns...',
+      };
+    }
+
+    // Process submission mock
+    if (endpoint === '/api/process') {
+      return {
+        jobId: `job-${Date.now()}`,
+        status: 'submitted',
+        message: 'Job submitted successfully',
+      };
+    }
+
+    // Mapping suggestions mock
+    if (endpoint.includes('/api/mapping/')) {
+      return {
+        suggestions: [
+          { source: 'Policy Number', target: 'policy_id', confidence: 0.95 },
+          { source: 'Premium Amount', target: 'premium_value', confidence: 0.87 },
+          { source: 'Effective Date', target: 'effective_date', confidence: 0.92 },
+        ],
+      };
+    }
+
+    // Default empty response
+    return {};
+  },
+
+  // Auth headers helper (placeholder)
+  async getAuthHeaders(): Promise<Record<string, string>> {
+    // TODO: Implement actual auth token retrieval
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  },
+};
+
+// Export both for compatibility during migration
+export default apiClient;
+
+// Utility functions for common operations
+export const apiUtils = {
+  /**
+   * Format file size for display
+   */
+  formatFileSize(bytes: number): string {
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    if (bytes === 0) return '0 Bytes';
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
+  },
+
+  /**
+   * Format job duration
+   */
+  formatDuration(startTime: Date, endTime?: Date): string {
+    const end = endTime || new Date();
+    const duration = end.getTime() - startTime.getTime();
+    const minutes = Math.floor(duration / 60000);
+    const seconds = Math.floor((duration % 60000) / 1000);
+    return `${minutes}m ${seconds}s`;
+  },
+
+  /**
+   * Validate file for processing
+   */
+  validateFile(file: FileItem): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+    
+    if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
+      errors.push('File must be an Excel file (.xlsx or .xls)');
+    }
+    
+    if (file.size > 100 * 1024 * 1024) { // 100MB limit
+      errors.push('File size must be less than 100MB');
+    }
+    
+    if (file.status === 'error') {
+      errors.push('File has processing errors');
+    }
+    
+    return {
+      valid: errors.length === 0,
+      errors,
+    };
+  },
+};
