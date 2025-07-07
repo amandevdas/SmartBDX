@@ -1,7 +1,8 @@
 "use client";
 
-// This is a placeholder for Azure AD authentication
-// In a real implementation, this would use MSAL (Microsoft Authentication Library)
+// SmartBDX Authentication Service
+// Prepared for Azure AD integration with MSAL
+// Currently using enhanced mock implementation
 
 import React, { useState, useEffect, createContext, useContext, ReactNode } from 'react';
 
@@ -10,6 +11,9 @@ interface User {
   name: string;
   email: string;
   token: string;
+  roles: string[];
+  tenant: string;
+  expiresAt: Date;
 }
 
 interface AuthContextType {
@@ -19,6 +23,8 @@ interface AuthContextType {
   login: () => Promise<void>;
   logout: () => void;
   getToken: () => string | null;
+  refreshToken: () => Promise<void>;
+  hasRole: (role: string) => boolean;
 }
 
 // Create a context for authentication
@@ -29,6 +35,8 @@ const AuthContext = createContext<AuthContextType>({
   login: async () => {},
   logout: () => {},
   getToken: () => null,
+  refreshToken: async () => {},
+  hasRole: () => false,
 });
 
 // Mock user for demo purposes
@@ -37,6 +45,9 @@ const MOCK_USER: User = {
   name: 'John Doe',
   email: 'john.doe@example.com',
   token: 'mock-token-12345',
+  roles: ['user', 'bdx_analyst'],
+  tenant: 'smartbdx-dev',
+  expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
 };
 
 // Provider component that wraps the app and makes auth available
@@ -77,6 +88,23 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return user?.token || null;
   };
 
+  const refreshToken = async () => {
+    // TODO: Implement Azure AD token refresh
+    // For now, extend mock token expiry
+    if (user) {
+      const updatedUser = {
+        ...user,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+      };
+      setUser(updatedUser);
+      localStorage.setItem('smartbdx_user', JSON.stringify(updatedUser));
+    }
+  };
+
+  const hasRole = (role: string) => {
+    return user?.roles.includes(role) || false;
+  };
+
   const value = {
     user,
     isAuthenticated: !!user,
@@ -84,6 +112,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     login,
     logout,
     getToken,
+    refreshToken,
+    hasRole,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -108,8 +138,8 @@ export const withAuth = (Component: React.ComponentType) => {
       // For now, just redirect using window.location
       if (typeof window !== 'undefined') {
         window.location.href = '/login';
-        return null;
       }
+      return <div>Redirecting to login...</div>;
     }
     
     // If authenticated, render the component

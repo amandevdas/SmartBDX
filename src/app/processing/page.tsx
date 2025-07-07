@@ -1,7 +1,7 @@
 // src/app/processing/page.tsx
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Table, Modal, Button, Tag, Space, Card, Statistic, message, Spin, Row, Col, Alert, Popconfirm } from 'antd';
 import { EyeOutlined, DeleteOutlined } from '@ant-design/icons';
 import { usePolling, apiRequest } from '../../hooks/useApi';
@@ -10,14 +10,14 @@ import { useAppContext } from '@/context/AppContext';
 import type { ColumnsType } from 'antd/es/table';
 
 // The JobItem now directly uses the JobStatus from context, ensuring type compatibility
-interface JobItem extends JobStatus {
+type JobItem = JobStatus & {
   id: string; // Add id for table rowKey
   batchId?: string;
   completed_files?: number;
   total_files?: number;
   current_file?: string;
   files?: ProcessedFile[];
-}
+};
 
 export default function ProcessingPage() {
   const { jobs, updateJob, loadJobs, jobsLoading } = useAppContext();
@@ -25,6 +25,9 @@ export default function ProcessingPage() {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedJob, setSelectedJob] = useState<JobItem | null>(null);
   const [clearingJobs, setClearingJobs] = useState(false);
+
+  // Ref to prevent duplicate execution in React Strict Mode
+  const hasInitialized = useRef(false);
 
   const showDetailsModal = (job: JobItem) => {
     setSelectedJob(job);
@@ -62,40 +65,98 @@ export default function ProcessingPage() {
     }
   };
 
-  // Load jobs from KV store when component mounts
+  // Load jobs from KV store when component mounts - ROBUST: Handle React Strict Mode
   useEffect(() => {
-    const initializeJobs = async () => {
-      try {
-        await loadJobs();
-      } catch (error) {
-        console.error('Failed to load jobs:', error);
-      } finally {
-        setInitialLoading(false);
-      }
-    };
+    if (!hasInitialized.current) {
+      console.log('🔄 Processing page: Starting initial load sequence');
+      hasInitialized.current = true;
+      
+      let isMounted = true;
+      
+      const initializeJobs = async () => {
+        try {
+          await loadJobs();
+        } catch (error) {
+          if (isMounted) {
+            console.error('Failed to load jobs:', error);
+          }
+        } finally {
+          if (isMounted) {
+            setInitialLoading(false);
+          }
+        }
+      };
 
-    initializeJobs();
-  }, [loadJobs]);
+      initializeJobs();
+      
+      return () => {
+        isMounted = false;
+      };
+    } else {
+      console.log('🔄 [STRICT MODE] Skipping duplicate execution - already initialized');
+    }
+  }, []); // FIXED: Removed unstable loadJobs dependency
 
   const pollingFetcher = useCallback(async () => {
-    const activeJobs = jobs.filter(job =>
+    // STABILIZED: Use runtime state checking instead of dependency-based checking
+    const currentJobs = jobs; // Access jobs at runtime
+    const activeJobs = currentJobs.filter(job =>
       (job.status === 'processing' || job.status === 'submitted') && job.batchId
     );
 
     if (activeJobs.length === 0) return null;
 
     try {
-      const batchIds = activeJobs.map(job => job.batchId!);
-      const updates = await apiRequest<any[]>('/jobs/status', {
-        method: 'POST',
-        body: JSON.stringify({ batchIds }),
-      });
+      console.log(`🔄 Polling ${activeJobs.length} active jobs via Databricks...`);
+      
+      // Get status updates for each active batch using the Databricks backend
+      const updates = await Promise.all(
+        activeJobs.map(async (job) => {
+          try {
+            const response = await apiRequest<{data: any}>('/databricks', {
+              method: 'POST',
+              body: JSON.stringify({
+                operation: 'get_batch_status',
+                parameters: { batch_id: job.batchId }
+              })
+            });
+            
+            const data = response?.data || response;
+            return {
+              jobId: job.jobId,
+              batchId: job.batchId,
+              status: data.status || job.status,
+              progress: data.progress || ('progress' in job ? job.progress : 0),
+              message: data.current_file || data.message || job.message,
+              // Enhanced backend data
+              rate_limit_status: data.rate_limit_status,
+              checkpoint_data: data.checkpoint_data,
+              cost_estimate: data.cost_estimate,
+              cache_utilization: data.cache_utilization,
+              completed_files: data.completed_files,
+              total_files: data.total_files,
+              current_file: data.current_file
+            };
+          } catch (error) {
+            console.warn(`Failed to get status for batch ${job.batchId}:`, error);
+            return {
+              jobId: job.jobId,
+              batchId: job.batchId,
+              status: job.status,
+              progress: ('progress' in job ? job.progress : 0),
+              message: job.message
+            };
+          }
+        })
+      );
+      
+      console.log(`✅ Received ${updates.length} batch status updates from Databricks`);
       return updates;
     } catch (error) {
       console.error('Polling error:', error);
       return null;
     }
-  }, [jobs]);
+  }, []); // FIXED: Removed jobs dependency to prevent function recreation
 
   const shouldPoll = useMemo(() => 
     jobs.some(job => job.status === 'processing' || job.status === 'submitted'),
@@ -266,7 +327,7 @@ export default function ProcessingPage() {
       {selectedJob && (
         <Modal
           title={`Files for Batch: ${selectedJob.batchId}`}
-          visible={isModalVisible}
+          open={isModalVisible}
           onOk={handleModalClose}
           onCancel={handleModalClose}
           footer={[

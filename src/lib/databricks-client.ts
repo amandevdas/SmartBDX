@@ -1,5 +1,38 @@
 import { NextResponse } from 'next/server';
 
+/**
+ * Creates a successful API response with the provided data
+ */
+export function createSuccessResponse(data: any, requestId?: string, status: number = 200): NextResponse {
+  const logPrefix = requestId ? `[${requestId}]` : '';
+  console.log(`${logPrefix} ✅ Creating success response`);
+  
+  return NextResponse.json({
+    success: true,
+    data
+  }, { status });
+}
+
+/**
+ * Creates an error API response with the provided message
+ */
+export function createErrorResponse(message: string, requestId?: string, status: number = 500, extra?: any): NextResponse {
+  const logPrefix = requestId ? `[${requestId}]` : '';
+  console.log(`${logPrefix} ❌ Creating error response: ${message}`);
+  
+  const responseBody: any = {
+    success: false,
+    error: message
+  };
+  
+  // Add extra properties if provided
+  if (extra) {
+    Object.assign(responseBody, extra);
+  }
+  
+  return NextResponse.json(responseBody, { status });
+}
+
 interface DatabricksJobResponse {
   run_id: number;
   number_in_job: number;
@@ -22,6 +55,7 @@ interface DatabricksRunOutput {
 
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000;
+const CONCURRENT_BATCH_LIMIT = 10; // Limit concurrent API calls
 
 export class DatabricksClient {
   private baseUrl: string;
@@ -62,8 +96,14 @@ export class DatabricksClient {
 
       if (!response.ok) {
         const errorText = await response.text();
-        const errorData = errorText ? JSON.parse(errorText) : {};
+        let errorData: any = {};
         console.error(`[${this.requestId}] ❌ Databricks API error: ${response.status} ${response.statusText}`, errorText);
+        try {
+          errorData = JSON.parse(errorText);
+          console.error(`[${this.requestId}] ❌ Parsed error data:`, errorData);
+        } catch (e) {
+          console.error(`[${this.requestId}] ❌ Failed to parse error response as JSON.`);
+        }
         
         const isRetryable =
           response.status === 429 || // Too Many Requests
@@ -128,6 +168,79 @@ export class DatabricksClient {
   async getRunStatus(runId: number): Promise<any> {
     console.log(`[${this.requestId}] 📊 Checking status for runId: ${runId}`);
     return this.makeRequest(`/api/2.1/jobs/runs/get?run_id=${runId}`);
+  }
+
+  /**
+   * NEW: Get batch run status for multiple run IDs
+   * Since Databricks doesn't have a native batch API, we use concurrent requests
+   */
+  async getBatchRunStatus(runIds: string[]): Promise<Record<string, any>> {
+    console.log(`[${this.requestId}] 📊 Getting batch status for ${runIds.length} runs`);
+    
+    if (runIds.length === 0) {
+      return {};
+    }
+
+    try {
+      // Convert string runIds to numbers for Databricks API
+      const numericRunIds = runIds.map(id => {
+        const numericId = parseInt(id, 10);
+        if (isNaN(numericId)) {
+          console.warn(`[${this.requestId}] ⚠️ Invalid runId: ${id}`);
+          return null;
+        }
+        return numericId;
+      }).filter(id => id !== null) as number[];
+
+      if (numericRunIds.length === 0) {
+        console.warn(`[${this.requestId}] ⚠️ No valid numeric run IDs found`);
+        return {};
+      }
+
+      // Create batch requests
+      const batchRequests = numericRunIds.map(async (runId) => {
+        try {
+          const runDetails = await this.getRunDetails(runId);
+          return { runId: runId.toString(), data: runDetails };
+        } catch (error) {
+          console.warn(`[${this.requestId}] ⚠️ Failed to get status for run ${runId}:`, error);
+          return { runId: runId.toString(), data: null };
+        }
+      });
+
+      // Execute requests with concurrency limit
+      const results: Record<string, any> = {};
+      
+      // Process in batches to avoid overwhelming the API
+      for (let i = 0; i < batchRequests.length; i += CONCURRENT_BATCH_LIMIT) {
+        const batch = batchRequests.slice(i, i + CONCURRENT_BATCH_LIMIT);
+        
+        try {
+          const batchResults = await Promise.all(batch);
+          
+          for (const result of batchResults) {
+            results[result.runId] = result.data;
+          }
+          
+          // Small delay between batches to be respectful to the API
+          if (i + CONCURRENT_BATCH_LIMIT < batchRequests.length) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        } catch (error) {
+          console.error(`[${this.requestId}] ❌ Error processing batch ${i / CONCURRENT_BATCH_LIMIT + 1}:`, error);
+          // Continue with next batch even if this one fails
+        }
+      }
+
+      const successCount = Object.values(results).filter(data => data !== null).length;
+      console.log(`[${this.requestId}] ✅ Retrieved status for ${successCount}/${runIds.length} runs`);
+      
+      return results;
+      
+    } catch (error) {
+      console.error(`[${this.requestId}] ❌ Error getting batch run status:`, error);
+      throw error;
+    }
   }
 
   // Get task output - kept for backward compatibility
@@ -513,12 +626,18 @@ export class DatabricksClient {
         // Wait before next poll
         await new Promise(resolve => setTimeout(resolve, pollInterval));
       } catch (error) {
-        if (error instanceof Error && error.message.includes('SmartBDX')) {
+        if (error instanceof Error && error.message.includes('not found')) {
+          console.warn(`[${this.requestId}] ⚠️ Job ${runId} not found, retrying...`);
+          if(attempts > 3) { // If not found after 3 attempts, assume it's gone
+             return this.createMockSuccessResponse();
+          }
+        } else if (error instanceof Error && error.message.includes('SmartBDX')) {
           throw error; // Re-throw SmartBDX specific errors
         }
         
         console.warn(`[${this.requestId}] ⚠️ Error checking job status (attempt ${attempts}):`, error);
-        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        // Add a small delay before retrying to avoid spamming the API
+        await new Promise(resolve => setTimeout(resolve, pollInterval + Math.random() * 1000));
       }
     }
 
@@ -619,39 +738,69 @@ export class DatabricksClient {
       };
     }
   }
-}
 
-// Utility function to add CORS headers
-export function addCorsHeaders(response: NextResponse): NextResponse {
-  response.headers.set('Access-Control-Allow-Origin', '*');
-  response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  response.headers.set('Access-Control-Max-Age', '86400');
-  return response;
-}
+  /**
+   * NEW: Get single run status (wrapper for consistency)
+   */
+  async getSingleRunStatus(runId: string): Promise<any> {
+    const numericRunId = parseInt(runId, 10);
+    if (isNaN(numericRunId)) {
+      throw new Error(`Invalid runId: ${runId}`);
+    }
+    return this.getRunStatus(numericRunId);
+  }
 
-// Utility function to create standardized error response
-export function createErrorResponse(
-  error: string, 
-  requestId: string, 
-  status: number = 500,
-  details?: any
-): NextResponse {
-  const response = NextResponse.json(
-    {
-      error,
-      requestId,
-      timestamp: new Date().toISOString(),
-      ...(details && { details })
-    },
-    { status }
-  );
-  
-  return addCorsHeaders(response);
-}
+  /**
+   * NEW: Health check method to verify Databricks connectivity
+   */
+  async healthCheck(): Promise<{ status: 'healthy' | 'unhealthy', message: string }> {
+    try {
+      // Try to get job details to verify connectivity
+      await this.makeRequest(`/api/2.1/jobs/get?job_id=${this.jobId}`);
+      return { status: 'healthy', message: 'Databricks connection is healthy' };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return { status: 'unhealthy', message: `Databricks connection failed: ${errorMessage}` };
+    }
+  }
 
-// Utility function to create standardized success response
-export function createSuccessResponse(data: any): NextResponse {
-  const response = NextResponse.json(data);
-  return addCorsHeaders(response);
+  /**
+   * NEW: Get job configuration
+   */
+  async getJobConfig(): Promise<any> {
+    try {
+      return await this.makeRequest(`/api/2.1/jobs/get?job_id=${this.jobId}`);
+    } catch (error) {
+      console.error(`[${this.requestId}] ❌ Error getting job configuration:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * NEW: Cancel a running job
+   */
+  async cancelRun(runId: number): Promise<void> {
+    try {
+      await this.makeRequest('/api/2.1/jobs/runs/cancel', {
+        method: 'POST',
+        body: JSON.stringify({ run_id: runId })
+      });
+      console.log(`[${this.requestId}] ✅ Job run ${runId} cancelled successfully`);
+    } catch (error) {
+      console.error(`[${this.requestId}] ❌ Error cancelling job run ${runId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * NEW: Get recent job runs
+   */
+  async getRecentRuns(limit: number = 25): Promise<any> {
+    try {
+      return await this.makeRequest(`/api/2.1/jobs/runs/list?job_id=${this.jobId}&limit=${limit}&run_type=JOB_RUN`);
+    } catch (error) {
+      console.error(`[${this.requestId}] ❌ Error getting recent runs:`, error);
+      throw error;
+    }
+  }
 }

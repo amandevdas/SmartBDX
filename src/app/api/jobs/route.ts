@@ -11,13 +11,13 @@ export async function GET(request: NextRequest) {
     
     // Convert Redis jobs to JobStatus format
     const jobsData = jobs.map(redisJob => ({
-      jobId: redisJob.jobId,
+      jobId: redisJob.id, // Use id instead of jobId
       status: redisJob.status,
-      progress: redisJob.progress,
+      progress: ('progress' in redisJob ? redisJob.progress : 0),
       message: redisJob.message,
       batchId: redisJob.batchId,
-      timestamp: redisJob.timestamp,
-      endTime: redisJob.endTime,
+      timestamp: redisJob.timestamp || redisJob.createdAt,
+      endTime: ('endTime' in redisJob ? redisJob.endTime : undefined),
       files: redisJob.files || [], // Ensure the files array is always present
     }));
 

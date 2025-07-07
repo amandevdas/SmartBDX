@@ -139,24 +139,48 @@ export async function POST(request: NextRequest) {
 // Mock data helper function
 function getMockDataForOperation(operation: string, parameters?: any): any {
   console.log(`Generating mock data for operation: ${operation}`);
-  
+
   const mockData: Record<string, any> = {
-    discover_files: {
+    discover_files_with_sheets: {
       success: true,
       data: [
-        { id: "1", file_name: "Q1_2023_Claims.xlsx", status: "completed", last_modified: "2023-04-15", size: 1024 * 25, sheets: 3, sheet_names: ["Claims", "Premiums", "Summary"] },
-        { id: "2", file_name: "Q2_2023_Claims.xlsx", status: "completed", last_modified: "2023-07-20", size: 1024 * 32, sheets: 3, sheet_names: ["Claims", "Premiums", "Summary"] },
-        { id: "3", file_name: "Q3_2023_Claims.xlsx", status: "processing", last_modified: "2023-10-10", size: 1024 * 28, sheets: 3, sheet_names: ["Claims", "Premiums", "Summary"] },
-        { id: "4", file_name: "Q4_2023_Claims.xlsx", status: "pending", last_modified: "2024-01-05", size: 1024 * 30, sheets: 3, sheet_names: ["Claims", "Premiums", "Summary"] },
-        { id: "5", file_name: "Annual_Summary_2023.xlsx", status: "failed", last_modified: "2024-01-15", size: 1024 * 45, sheets: 5, sheet_names: ["Claims", "Premiums", "Expenses", "Revenue", "Summary"] },
+        {
+          id: 'file-001',
+          name: 'Bordereaux_Claims_Q1_2023.xlsx',
+          status: 'ready',
+          size: 1024 * 25,
+          lastModified: new Date('2023-04-15').toISOString(),
+          priority_score: 95,
+          processing_status: 'ready_for_processing',
+          structure_signature: 'claims_standard_v2',
+          cache_available: true,
+          estimated_processing_time: 180,
+          ai_recommendation: 'high_priority',
+          base_file_name: 'bordereaux_claims_q1_2023',
+          file_size_mb: 0.024,
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          path: '/Volumes/test/bronze/raw/Bordereaux_Claims_Q1_2023.xlsx',
+          sheets: ['Claims Data', 'Claim Details', 'Summary']
+        },
+        {
+          id: 'file-002',
+          name: 'Bordereaux_Premium_Q2_2023.xlsx',
+          status: 'ready',
+          size: 1024 * 32,
+          lastModified: new Date('2023-07-20').toISOString(),
+          priority_score: 85,
+          processing_status: 'ready_for_processing',
+          structure_signature: 'premium_standard_v1',
+          cache_available: false,
+          estimated_processing_time: 240,
+          ai_recommendation: 'high_priority',
+          base_file_name: 'bordereaux_premium_q2_2023',
+          file_size_mb: 0.031,
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          path: '/Volumes/test/bronze/raw/Bordereaux_Premium_Q2_2023.xlsx',
+          sheets: ['Premium Data', 'Premium Details', 'Summary']
+        },
       ]
-    },
-    get_sheet_names: {
-      success: true,
-      data: {
-        total_sheets: 3,
-        sheet_names: ["Claims", "Premiums", "Summary"]
-      }
     },
     process_files: {
       success: true,
@@ -180,10 +204,30 @@ function getMockDataForOperation(operation: string, parameters?: any): any {
         elapsed_time: "00:15:30",
         estimated_remaining: "00:10:00"
       }
+    },
+    smart_file_selection: {
+        success: true,
+        data: {
+            recommended_files: ['file-001', 'file-002'],
+            reasoning: "These files have the highest priority scores and are recommended for immediate processing."
+        }
+    },
+    get_cache_analytics: {
+        success: true,
+        data: {
+            cache_hit_rate: 0.78,
+            total_queries: 1500,
+            cache_hits: 1170,
+            cache_misses: 330,
+            most_cached_files: [
+                { file: 'Reinsurance_Data_Q3_2023.xlsx', hits: 250 },
+                { file: 'Bordereaux_Claims_Q1_2023.xlsx', hits: 180 }
+            ]
+        }
     }
   };
-  
-  return mockData[operation] || { success: true, data: { message: "Mock data not available for this operation" } };
+
+  return mockData[operation] || { success: true, data: { message: `Mock data not available for operation: ${operation}` } };
 }
 
 // Handle GET requests (for simple operations)

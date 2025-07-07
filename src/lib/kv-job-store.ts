@@ -21,7 +21,7 @@ const JOBS_KEY = 'smartbdx:jobs';
 const JOB_PREFIX = 'smartbdx:job:';
 const BATCH_PREFIX = 'smartbdx:batch:';
 
-interface StoredJob extends JobStatus {
+type StoredJob = JobStatus & {
   id: string;
   batchId: string;
   runId: number;
@@ -153,12 +153,11 @@ export const updateJob = async (jobId: string, updates: Partial<JobStatus>): Pro
     const existingJob = JSON.parse(existingJobData) as StoredJob;
 
     // Merge updates
-    const updatedJob: StoredJob = {
+    const updatedJob: any = {
       ...existingJob,
       ...updates,
       // Preserve core fields
       id: existingJob.id,
-      jobId: existingJob.jobId,
       batchId: existingJob.batchId,
       runId: existingJob.runId,
       createdAt: existingJob.createdAt,
@@ -232,7 +231,8 @@ export const getJobsStats = async (): Promise<{
     };
     
     jobs.forEach(job => {
-      stats.byStatus[job.status] = (stats.byStatus[job.status] || 0) + 1;
+      const status = (job as any).status || 'unknown';
+      stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
     });
     
     return stats;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Modal, Table, Tabs, Spin, Alert } from "antd";
 import type { TabsProps } from "antd";
 
@@ -27,10 +27,28 @@ export const FilePreviewModal = ({ file, visible, onClose }: FilePreviewModalPro
   const [sheets, setSheets] = useState<SheetData[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // React Strict Mode Protection - prevent duplicate execution
+  const hasInitialized = useRef(false);
+  const currentFileId = useRef<string | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Main effect with React Strict Mode protection
   useEffect(() => {
-    if (visible && file) {
+    if (!hasInitialized.current && visible && file) {
+      // Deduplication check - prevent multiple calls for same file
+      if (currentFileId.current === file.id) {
+        return;
+      }
+
+      hasInitialized.current = true;
+      currentFileId.current = file.id;
       setLoading(true);
       setError(null);
+      
+      // Clear any existing timeout
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
       
       // In a real implementation, fetch preview data from API
       // fetch(`/api/files/${file.id}/preview`)
@@ -45,7 +63,7 @@ export const FilePreviewModal = ({ file, visible, onClose }: FilePreviewModalPro
       //   });
         
       // For demo purposes, simulate API call with mock data
-      setTimeout(() => {
+      timeoutRef.current = setTimeout(() => {
         const mockSheets = [
           {
             name: "Sheet1",
@@ -68,9 +86,39 @@ export const FilePreviewModal = ({ file, visible, onClose }: FilePreviewModalPro
         
         setSheets(mockSheets);
         setLoading(false);
+        timeoutRef.current = null;
       }, 1000);
     }
   }, [visible, file]);
+
+  // Cleanup and reset effect
+  useEffect(() => {
+    if (!visible) {
+      // Reset initialization flag when modal closes
+      hasInitialized.current = false;
+      currentFileId.current = null;
+      
+      // Clear any pending timeouts
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      
+      // Reset states
+      setSheets([]);
+      setError(null);
+      setLoading(false);
+    }
+  }, [visible]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
 
   const items: TabsProps["items"] = sheets.map(sheet => ({
     key: sheet.name,

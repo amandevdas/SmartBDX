@@ -5,7 +5,6 @@ import { Table, Card, Button, Tag, Space, Spin, Alert, Tabs, Progress, Modal, Ch
 import { CheckOutlined, CloseOutlined, EyeOutlined, CheckCircleOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 
-const { TabPane } = Tabs;
 
 interface MappingFile {
   id: string;
@@ -408,11 +407,25 @@ const MappingPage = () => {
         <Alert type="error" message="Failed to load mapping data" description={error.message} className="mb-4" />
       )}
 
-      <Tabs activeKey={activeTab} onChange={setActiveTab} className="mb-4">
-        <TabPane tab={`Pending (${files.filter(f => f.status === "pending").length})`} key="pending" />
-        <TabPane tab={`Approved (${files.filter(f => f.status === "approved").length})`} key="approved" />
-        <TabPane tab={`Rejected (${files.filter(f => f.status === "rejected").length})`} key="rejected" />
-      </Tabs>
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        className="mb-4"
+        items={[
+          {
+            key: "pending",
+            label: `Pending (${files.filter(f => f.status === "pending").length})`
+          },
+          {
+            key: "approved",
+            label: `Approved (${files.filter(f => f.status === "approved").length})`
+          },
+          {
+            key: "rejected",
+            label: `Rejected (${files.filter(f => f.status === "rejected").length})`
+          }
+        ]}
+      />
 
       <Spin spinning={loading}>
         <Table

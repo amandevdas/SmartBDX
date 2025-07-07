@@ -4,7 +4,7 @@ import type { JobStatus } from '@/types/api';
 // NOTE: This is for demonstration purposes. In a production environment,
 // you would use a proper database (e.g., Redis, PostgreSQL) to persist job state.
 
-interface StoredJob extends JobStatus {
+type StoredJob = JobStatus & {
   id: string;
   batchId: string;
   runId: number;
