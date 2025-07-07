@@ -10,7 +10,8 @@ Dependencies: smartbdx_infrastructure, spark
 
 # === IMPORTS ===
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List  # Add List to existing imports
+from datetime import datetime, timedelta      # Add this new import
 
 # PySpark imports
 from pyspark.sql import SparkSession
@@ -23,20 +24,40 @@ spark = SparkSession.getActiveSession()
 
 # === PROGRESS MONITORING FUNCTIONS ===
 
-def show_batch_progress(batch_id: Optional[str] = None) -> None:
+def show_batch_progress(batch_id: Optional[str] = None, return_data: bool = False) -> Optional[Dict[str, Any]]:
     """
-    Show progress of current or all batches.
+    Show progress of current or all batches with optional data return for API consumption.
     
     Displays batch progress with status counts, timing information,
     and completion percentages for monitoring active processing.
     
     Args:
         batch_id (Optional[str]): Specific batch ID to monitor, or None for all batches
+        return_data (bool): If True, returns structured data instead of printing
+        
+    Returns:
+        Optional[Dict[str, Any]]: Batch progress data if return_data=True, None otherwise
         
     Displays:
         - Batch ID and status breakdown
         - Item counts per status (completed, failed, pending)
         - First started and last completed timestamps
+        - Progress percentages and estimated completion times
+        
+    API Return Format:
+        {
+            "batch_id": str,
+            "status": str,  # "completed", "processing", "failed", "pending"
+            "progress": float,  # 0-100 percentage
+            "completed": int,
+            "total": int,
+            "errors": int,
+            "pending": int,
+            "start_time": str,
+            "last_updated": str,
+            "elapsed_time_minutes": float,
+            "estimated_remaining_minutes": Optional[float]
+        }
         
     Example:
         >>> show_batch_progress("production_batch_001")
@@ -44,24 +65,256 @@ def show_batch_progress(batch_id: Optional[str] = None) -> None:
         
         >>> show_batch_progress()
         # Shows progress for all batches
+        
+        >>> batch_data = show_batch_progress("batch_001", return_data=True)
+        # Returns structured data for API consumption
     """
+    from datetime import datetime, timedelta
+    
     where_clause = f"WHERE batch_id = '{batch_id}'" if batch_id else ""
     
-    result = spark.sql(f"""
-    SELECT 
-        batch_id,
-        status,
-        COUNT(*) as count,
-        MIN(started_at) as first_started,
-        MAX(completed_at) as last_completed
-    FROM bdx.metadata_cache.batch_checkpoints
-    {where_clause}
-    GROUP BY batch_id, status
-    ORDER BY batch_id DESC, status
-    """)
+    try:
+        result = spark.sql(f"""
+        SELECT
+            batch_id,
+            status,
+            COUNT(*) as count,
+            MIN(started_at) as first_started,
+            MAX(completed_at) as last_completed
+        FROM bdx.metadata_cache.batch_checkpoints
+        {where_clause}
+        GROUP BY batch_id, status
+        ORDER BY batch_id DESC, status
+        """)
+        
+        # Collect results for processing
+        rows = result.collect()
+        
+        if not rows:
+            if return_data:
+                return {
+                    "batch_id": batch_id or "unknown",
+                    "status": "not_found",
+                    "progress": 0,
+                    "completed": 0,
+                    "total": 0,
+                    "errors": 0,
+                    "pending": 0,
+                    "start_time": None,
+                    "last_updated": None,
+                    "elapsed_time_minutes": 0,
+                    "estimated_remaining_minutes": None,
+                    "error_message": "No batch data found"
+                }
+            else:
+                print(f"📊 No batch data found {'for batch: ' + batch_id if batch_id else ''}")
+                return None
+        
+        if return_data and batch_id:
+            # Return structured data for specific batch (API mode)
+            return _format_single_batch_data(rows, batch_id)
+        elif return_data and not batch_id:
+            # Return data for all batches (API mode)
+            return _format_all_batches_data(rows)
+        else:
+            # Display mode (original functionality)
+            print(f"📊 Batch Progress {'for ' + batch_id if batch_id else '(All Batches)'}:")
+            
+            if batch_id:
+                # Show detailed progress for single batch
+                _display_single_batch_progress(rows, batch_id)
+            else:
+                # Show summary for all batches
+                result.show(50, truncate=False)
+                _display_batch_summary(rows)
+            
+            return None
+            
+    except Exception as e:
+        error_msg = f"Error retrieving batch progress: {str(e)}"
+        print(f"❌ {error_msg}")
+        
+        if return_data:
+            return {
+                "batch_id": batch_id or "unknown",
+                "status": "error",
+                "progress": 0,
+                "completed": 0,
+                "total": 0,
+                "errors": 1,
+                "pending": 0,
+                "start_time": None,
+                "last_updated": None,
+                "elapsed_time_minutes": 0,
+                "estimated_remaining_minutes": None,
+                "error_message": error_msg
+            }
+        return None
+
+
+def _format_single_batch_data(rows: List, batch_id: str) -> Dict[str, Any]:
+    """Format batch data for single batch API response"""
+    from datetime import datetime
     
-    print(f"📊 Batch Progress {'for ' + batch_id if batch_id else '(All Batches)'}:")
-    result.show(50, truncate=False)
+    # Aggregate data by status
+    status_counts = {}
+    earliest_start = None
+    latest_completion = None
+    
+    for row in rows:
+        if row['batch_id'] == batch_id:
+            status_counts[row['status']] = row['count']
+            
+            if row['first_started']:
+                if earliest_start is None or row['first_started'] < earliest_start:
+                    earliest_start = row['first_started']
+            
+            if row['last_completed']:
+                if latest_completion is None or row['last_completed'] > latest_completion:
+                    latest_completion = row['last_completed']
+    
+    # Calculate totals
+    completed = status_counts.get('completed', 0)
+    failed = status_counts.get('failed', 0)
+    pending = status_counts.get('pending', 0)
+    processing = status_counts.get('processing', 0)
+    
+    total = completed + failed + pending + processing
+    
+    # Calculate progress
+    progress = (completed / total * 100) if total > 0 else 0
+    
+    # Determine overall status
+    if total == 0:
+        overall_status = "empty"
+    elif pending == 0 and processing == 0:
+        if failed == 0:
+            overall_status = "completed"
+        else:
+            overall_status = "completed_with_errors"
+    elif completed == 0 and failed == 0:
+        overall_status = "pending"
+    else:
+        overall_status = "processing"
+    
+    # Calculate timing
+    elapsed_minutes = 0
+    estimated_remaining = None
+    
+    if earliest_start:
+        current_time = datetime.now()
+        elapsed = current_time - earliest_start
+        elapsed_minutes = elapsed.total_seconds() / 60
+        
+        # Estimate remaining time based on current rate
+        if completed > 0 and (pending + processing) > 0:
+            rate_per_minute = completed / elapsed_minutes if elapsed_minutes > 0 else 0
+            if rate_per_minute > 0:
+                estimated_remaining = (pending + processing) / rate_per_minute
+    
+    return {
+        "batch_id": batch_id,
+        "status": overall_status,
+        "progress": round(progress, 1),
+        "completed": completed,
+        "total": total,
+        "errors": failed,
+        "pending": pending,
+        "processing": processing,
+        "start_time": earliest_start.isoformat() if earliest_start else None,
+        "last_updated": latest_completion.isoformat() if latest_completion else None,
+        "elapsed_time_minutes": round(elapsed_minutes, 1),
+        "estimated_remaining_minutes": round(estimated_remaining, 1) if estimated_remaining else None
+    }
+
+
+def _format_all_batches_data(rows: List) -> Dict[str, Any]:
+    """Format batch data for all batches API response"""
+    batches = {}
+    
+    # Group by batch_id
+    for row in rows:
+        batch_id = row['batch_id']
+        if batch_id not in batches:
+            batches[batch_id] = []
+        batches[batch_id].append(row)
+    
+    # Format each batch
+    batch_list = []
+    for batch_id, batch_rows in batches.items():
+        batch_data = _format_single_batch_data(batch_rows, batch_id)
+        batch_list.append(batch_data)
+    
+    # Sort by batch_id descending (most recent first)
+    batch_list.sort(key=lambda x: x['batch_id'], reverse=True)
+    
+    return {
+        "total_batches": len(batch_list),
+        "batches": batch_list,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+def _display_single_batch_progress(rows: List, batch_id: str) -> None:
+    """Display detailed progress for a single batch"""
+    from datetime import datetime
+    
+    # Calculate summary statistics
+    batch_data = _format_single_batch_data(rows, batch_id)
+    
+    print(f"\n🎯 Batch: {batch_id}")
+    print(f"📊 Status: {batch_data['status'].upper()}")
+    print(f"📈 Progress: {batch_data['progress']:.1f}% ({batch_data['completed']}/{batch_data['total']})")
+    
+    if batch_data['errors'] > 0:
+        print(f"❌ Errors: {batch_data['errors']}")
+    
+    if batch_data['pending'] > 0:
+        print(f"⏳ Pending: {batch_data['pending']}")
+    
+    if batch_data['processing'] > 0:
+        print(f"🔄 Processing: {batch_data['processing']}")
+    
+    if batch_data['start_time']:
+        print(f"🕐 Started: {batch_data['start_time']}")
+        print(f"⏱️  Elapsed: {batch_data['elapsed_time_minutes']:.1f} minutes")
+        
+        if batch_data['estimated_remaining_minutes']:
+            print(f"🔮 Est. Remaining: {batch_data['estimated_remaining_minutes']:.1f} minutes")
+    
+    if batch_data['last_updated']:
+        print(f"🕐 Last Updated: {batch_data['last_updated']}")
+    
+    print()
+
+
+def _display_batch_summary(rows: List) -> None:
+    """Display summary statistics for all batches"""
+    batches = {}
+    
+    # Group by batch_id
+    for row in rows:
+        batch_id = row['batch_id']
+        if batch_id not in batches:
+            batches[batch_id] = {"completed": 0, "failed": 0, "pending": 0, "processing": 0, "total": 0}
+        
+        batches[batch_id][row['status']] = row['count']
+        batches[batch_id]['total'] += row['count']
+    
+    print(f"\n📋 Summary ({len(batches)} batches):")
+    
+    total_items = sum(batch['total'] for batch in batches.values())
+    total_completed = sum(batch['completed'] for batch in batches.values())
+    total_failed = sum(batch['failed'] for batch in batches.values())
+    total_pending = sum(batch['pending'] for batch in batches.values())
+    
+    overall_progress = (total_completed / total_items * 100) if total_items > 0 else 0
+    
+    print(f"📊 Overall Progress: {overall_progress:.1f}% ({total_completed}/{total_items})")
+    print(f"✅ Completed: {total_completed}")
+    print(f"❌ Failed: {total_failed}")
+    print(f"⏳ Pending: {total_pending}")
+    print()
 
 def list_all_batches() -> None:
     """

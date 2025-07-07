@@ -45,8 +45,26 @@ export function useSmartBDXApi<T>(): UseSmartBDXApiResult<T> {
         case 'get_cache_analytics':
           result = await apiClient.getCacheAnalytics() as T;
           break;
+        case 'get_usage_analytics':
+          result = await apiClient.getUsageAnalytics() as T;
+          break;
+        case 'get_processing_insights':
+          result = await apiClient.getProcessingInsights() as T;
+          break;
         case 'check_processing_status':
           result = await apiClient.checkProcessingStatus(requestData?.file_ids || []) as T;
+          break;
+        case 'quick_file_analysis':
+          result = await apiClient.quickFileAnalysis(requestData?.file_ids || []) as T;
+          break;
+        case 'suggest_batch_strategy':
+          result = await apiClient.suggestBatchStrategy(requestData?.file_ids || []) as T;
+          break;
+        case 'analyze_batch_errors':
+          result = await apiClient.analyzeBatchErrors(requestData?.batch_id) as T;
+          break;
+        case 'resume_failed_batch':
+          result = await apiClient.resumeBatch(requestData?.batch_id) as T;
           break;
         default:
           // Fallback to direct API request for custom operations

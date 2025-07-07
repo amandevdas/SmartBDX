@@ -20,15 +20,17 @@ Version: 1.0
 # === IMPORTS ===
 import re
 import hashlib
+import time
+import getpass
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Union
-from collections import Counter
-from datetime import datetime
 import pandas as pd
 import tiktoken
 import json
-from decimal import Decimal
+import pandas as pd
+from datetime import datetime
 import numpy as np
+from decimal import Decimal
 
 # === CONSTANTS ===
 try:
@@ -42,8 +44,48 @@ except NameError:
     except Exception:
         dbutils = None
 
-
 # === TEXT PROCESSING FUNCTIONS ===
+def safe_json_serialize(obj):
+    """
+    Recursively serialize an object to be JSON-compatible.
+    
+    Handles common non-serializable types:
+    - datetime and pandas Timestamp objects
+    - numpy integer and float types
+    - Decimal objects
+    """
+    if isinstance(obj, dict):
+        return {k: safe_json_serialize(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [safe_json_serialize(item) for item in obj]
+    elif isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+    elif isinstance(obj, (np.int64, np.int32, np.int16, np.int8)):
+        return int(obj)
+    elif isinstance(obj, (np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, Decimal):
+        return float(obj)
+    else:
+        return obj
+
+# Keep the old function for backward compatibility for now, but it will be deprecated.
+def json_serialize_timestamps(obj):
+    """
+    Convert timestamps to ISO format strings in nested data structures.
+    
+    This function recursively traverses dictionaries and lists to find and convert
+    pandas Timestamp or datetime objects to ISO format strings, making them JSON serializable.
+    
+    Args:
+        obj: The object to serialize (dict, list, Timestamp, or other)
+        
+    Returns:
+        The same object structure with all Timestamp objects converted to strings
+    """
+    return safe_json_serialize(obj)
+
+
 def extract_base_file_name(file_name: str) -> str:
     """
     Extract normalized base file name for structure caching.
@@ -65,30 +107,24 @@ def extract_base_file_name(file_name: str) -> str:
         Removes: month names, years, dates, version numbers, separators
     """
     base = file_name.lower()
-    base = re.sub(
-        r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\d{2,4}', 
-        '', base
-    )
-    base = re.sub(r'(19|20)\d{2}', '', base)  # years
-    base = re.sub(r'\d{6,8}', '', base)  # yyyymm or yyyymmdd
-    base = re.sub(r'[_\-\.]?\d{1,2}', '', base)  # _01, -25, .31 etc.
-    base = re.sub(r'[_\-\.]+', '_', base)  # collapse separators
-    base = re.sub(r'^_+|_+$', '', base)  # remove leading/trailing underscores
+    base = re.sub(r'(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\d{2,4}', '', base)
+    base = re.sub(r'(19|20)\d{2}', '', base)                        # years
+    base = re.sub(r'\d{6,8}', '', base)                             # yyyymm or yyyymmdd
+    base = re.sub(r'[_\-\.]?\d{1,2}', '', base)                    # _01, -25, .31 etc.
+    base = re.sub(r'[_\-\.]+', '_', base)                           # collapse separators
+    base = re.sub(r'^_+|_+$', '', base)                             # remove leading/trailing underscores
     base = base.strip('_')
     return base
-
 
 def safe_view_name(name: str) -> str:
     """
     Convert any file/sheet name to a Spark-safe view name.
     
     Transforms names to comply with Spark SQL naming requirements by
-    removing special characters, normalizing case, and ensuring valid 
-    identifiers.
+    removing special characters, normalizing case, and ensuring valid identifiers.
     
     Args:
-        name (str): Original file or sheet name 
-                    (may contain spaces, special chars)
+        name (str): Original file or sheet name (may contain spaces, special chars)
         
     Returns:
         str: Spark-safe view name (lowercase, underscores, no leading digits)
@@ -110,7 +146,6 @@ def safe_view_name(name: str) -> str:
     # Collapse multiple underscores
     name = re.sub(r'_+', '_', name)
     return name.lower()
-
 
 def clean_percent(val: Union[str, float, int, None]) -> Optional[float]:
     """
@@ -140,12 +175,9 @@ def clean_percent(val: Union[str, float, int, None]) -> Optional[float]:
     try:
         if isinstance(val, str):
             val = val.replace("%", "").strip()
-        if val is None:
-            return None
         return float(val)
     except (ValueError, TypeError):
         return None
-
     
 def copy_volume_file_to_tmp_via_spark(volume_path: str) -> str:
     """
@@ -156,8 +188,7 @@ def copy_volume_file_to_tmp_via_spark(volume_path: str) -> str:
     for pandas/openpyxl processing.
     
     Args:
-        volume_path (str): Full path to file in Databricks volume 
-                           (dbfs:/Volumes/...)
+        volume_path (str): Full path to file in Databricks volume (dbfs:/Volumes/...)
         
     Returns:
         str: Local filesystem path to copied file (/dbfs/tmp/user/filename)
@@ -167,9 +198,7 @@ def copy_volume_file_to_tmp_via_spark(volume_path: str) -> str:
         IOError: If file copy operation fails or file is empty/unreadable
         
     Example:
-        >>> local_path = copy_volume_file_to_tmp_via_spark(
-        ...     "dbfs:/Volumes/test/bronze/raw/data.xlsx"
-        ... )
+        >>> local_path = copy_volume_file_to_tmp_via_spark("dbfs:/Volumes/test/bronze/raw/data.xlsx")
         >>> print(local_path)
         '/dbfs/tmp/user_domain_com/data.xlsx'
         
@@ -179,7 +208,7 @@ def copy_volume_file_to_tmp_via_spark(volume_path: str) -> str:
     """
     # Use user-scoped temp directory in DBFS
     import getpass
-    user = getpass.getuser().replace('@', '_').replace('.', '_')
+    user = getpass.getuser().replace('@','_').replace('.','_')
     file_name = Path(volume_path).name
     # Use DBFS root temp
     tmp_dir = f"/dbfs/tmp/{user}/"
@@ -202,17 +231,12 @@ def copy_volume_file_to_tmp_via_spark(volume_path: str) -> str:
         print(f"✅ File copied to: {tmp_path}")
         return tmp_path
     except Exception as e:
-        raise IOError(
-            f"❌ Failed to copy from volume: {volume_path} — {str(e)}"
-        )
+        raise IOError(f"❌ Failed to copy from volume: {volume_path} — {str(e)}")
 
 
-# ====📊 Data Processing Functions===
+#====📊 Data Processing Functions===
 
-def get_column_sample_values(
-    df: pd.DataFrame, col_idx: int, data_start: int, 
-    data_end: int, max_samples: int = 3
-) -> List[Any]:
+def get_column_sample_values(df: pd.DataFrame, col_idx: int, data_start: int, data_end: int, max_samples: int = 3) -> List[Any]:
     samples = []
     n_rows = df.shape[0]
     for i in range(data_start, min(data_end + 1, n_rows)):
@@ -225,7 +249,6 @@ def get_column_sample_values(
         except Exception:
             continue
     return samples
-
 
 def df_to_json_rows(df: pd.DataFrame) -> List[Dict[str, Any]]:
     """
@@ -251,14 +274,10 @@ def df_to_json_rows(df: pd.DataFrame) -> List[Dict[str, Any]]:
     return [
         {
             "row_index": int(idx),
-            "values": [
-                str(cell) if pd.notna(cell) else "" 
-                for cell in df.loc[idx].tolist()
-            ]
+            "values": [str(cell) if pd.notna(cell) else "" for cell in df.loc[idx].tolist()]
         }
         for idx in df.index
     ]
-
 
 def detect_table_boundaries(df: pd.DataFrame) -> List[Tuple[int, int]]:
     """
@@ -271,33 +290,28 @@ def detect_table_boundaries(df: pd.DataFrame) -> List[Tuple[int, int]]:
         df (pd.DataFrame): Input DataFrame to analyze
         
     Returns:
-        List[Tuple[int, int]]: List of (start_row, end_row) tuples for each 
-                               block
+        List[Tuple[int, int]]: List of (start_row, end_row) tuples for each block
         
     Example:
         >>> # For DF with data in rows 2-5 and 8-10
         >>> detect_table_boundaries(df)
         [(2, 5), (8, 10)]
     """
-    is_data_row = df.apply(
-        lambda row: any(str(cell).strip() for cell in row), axis=1
-    )
+    is_data_row = df.apply(lambda row: any(str(cell).strip() for cell in row), axis=1)
     blocks, in_block = [], False
     for idx, val in enumerate(is_data_row):
         if val and not in_block:
             start = idx
             in_block = True
         elif not val and in_block:
-            blocks.append((start, idx - 1))
+            blocks.append((start, idx-1))
             in_block = False
     if in_block:
-        blocks.append((start, len(is_data_row) - 1))
+        blocks.append((start, len(is_data_row)-1))
     return blocks
 
 
-def chunk_table_by_content(
-    df: pd.DataFrame, chunk_size: int = 150
-) -> pd.DataFrame:
+def chunk_table_by_content(df: pd.DataFrame, chunk_size: int = 150) -> pd.DataFrame:
     """
     Generator that yields DataFrame chunks without splitting table blocks.
     
@@ -319,15 +333,13 @@ def chunk_table_by_content(
     """
     boundaries = detect_table_boundaries(df)
     for start, end in boundaries:
-        for chunk_start in range(start, end + 1, chunk_size):
-            chunk_end = min(chunk_start + chunk_size - 1, end)
-            yield df.iloc[chunk_start:chunk_end + 1, :]
+        for chunk_start in range(start, end+1, chunk_size):
+            chunk_end = min(chunk_start+chunk_size-1, end)
+            yield df.iloc[chunk_start:chunk_end+1, :]
 
 
-def sample_table_rows(
-    df: pd.DataFrame, table_meta: Dict[str, Any], 
-    max_samples_per_col: int = 5
-) -> Tuple[List[List], List[List]]:
+
+def sample_table_rows(df: pd.DataFrame, table_meta: Dict[str, Any], max_samples_per_col: int = 5) -> Tuple[List[List], List[List]]:
     """
     Extract header rows and smart sample of data rows for AI analysis.
     
@@ -338,18 +350,15 @@ def sample_table_rows(
     Args:
         df (pd.DataFrame): Full sheet data as DataFrame
         table_meta (Dict[str, Any]): Table metadata with row classifications
-        max_samples_per_col (int, optional): Maximum samples per column. 
-                                             Defaults to 5.
+        max_samples_per_col (int, optional): Maximum samples per column. Defaults to 5.
         
     Returns:
-        Tuple[List[List], List[List]]: (header_rows, data_rows) as lists of 
-                                       lists
+        Tuple[List[List], List[List]]: (header_rows, data_rows) as lists of lists
         
     Example:
         >>> table_meta = {
         ...     'data_start_row': 5, 'data_end_row': 100,
-        ...     'header_rows': [3, 4], 'summary_rows': [101], 
-        ...     'noise_rows': [1, 2]
+        ...     'header_rows': [3, 4], 'summary_rows': [101], 'noise_rows': [1, 2]
         ... }
         >>> headers, data = sample_table_rows(df, table_meta)
         >>> len(headers)  # Number of header rows
@@ -357,28 +366,21 @@ def sample_table_rows(
         
     Note:
         Excludes header, summary, and noise rows from data sampling.
-        Prioritizes unique values and handles rare/edge case data 
-        intelligently.
-        Returns data suitable for LLM context without overwhelming token 
-        limits.
+        Prioritizes unique values and handles rare/edge case data intelligently.
+        Returns data suitable for LLM context without overwhelming token limits.
     """
-    data_start = table_meta.get('data_start_row', 0)
-    data_end = table_meta.get('data_end_row', len(df) - 1)
+    data_start = table_meta.get('data_start_row')
+    data_end = table_meta.get('data_end_row')
     headers = table_meta.get('header_rows', [])
     summary_rows = set(table_meta.get('summary_rows', []))
     noise_rows = set(table_meta.get('noise_rows', []))
 
     # All candidate data rows (exclude header/summary/noise)
-    data_idx = [
-        i for i in range(data_start, data_end + 1)
-        if i not in headers and i not in summary_rows and i not in noise_rows
-    ]
+    data_idx = [i for i in range(data_start, data_end + 1)
+                if i not in headers and i not in summary_rows and i not in noise_rows]
 
     # Remove blank rows
-    data_idx = [
-        i for i in data_idx 
-        if any(str(val).strip() for val in df.iloc[i, :].tolist())
-    ]
+    data_idx = [i for i in data_idx if any(str(val).strip() for val in df.iloc[i, :].tolist())]
     if not data_idx:
         return [], []
 
@@ -388,19 +390,14 @@ def sample_table_rows(
     if len(data_idx) > 1:
         samples_idx.add(data_idx[-1])
     if len(data_idx) > 3:
-        samples_idx.add(data_idx[len(data_idx) // 2])
-        samples_idx.add(data_idx[len(data_idx) // 3])
-        samples_idx.add(data_idx[(2 * len(data_idx)) // 3])
+        samples_idx.add(data_idx[len(data_idx)//2])
+        samples_idx.add(data_idx[len(data_idx)//3])
+        samples_idx.add(data_idx[(2*len(data_idx))//3])
 
     # Edge cases: rare values in 'risk', 'code', or 'id' columns
-    col_headers = table_meta.get(
-        'column_headers', [f'col_{i+1}' for i in range(df.shape[1])]
-    )
+    col_headers = table_meta.get('column_headers', [f'col_{i+1}' for i in range(df.shape[1])])
     for col_idx, header in enumerate(col_headers):
-        col_vals = [
-            str(df.iloc[i, col_idx]) for i in data_idx 
-            if pd.notna(df.iloc[i, col_idx])
-        ]
+        col_vals = [str(df.iloc[i, col_idx]) for i in data_idx if pd.notna(df.iloc[i, col_idx])]
         if not col_vals or all(v.strip() == "" for v in col_vals):
             continue
         val_counts = Counter(col_vals)
@@ -422,9 +419,7 @@ def sample_table_rows(
                         break
 
     # Gather header rows
-    header_rows = [
-        df.iloc[h, :].tolist() for h in headers if 0 <= h < len(df)
-    ]
+    header_rows = [df.iloc[h, :].tolist() for h in headers if 0 <= h < len(df)]
     data_rows = [df.iloc[i, :].tolist() for i in sorted(samples_idx)]
 
     return header_rows, data_rows
@@ -455,10 +450,7 @@ def estimate_tokens(prompt: str, model: str = "gpt-4") -> int:
     enc = tiktoken.get_encoding("cl100k_base")
     return len(enc.encode(prompt))
 
-
-def conservative_token_estimation(
-    df: pd.DataFrame, model: str = "gpt-4.1"
-) -> int:
+def conservative_token_estimation(df: pd.DataFrame, model: str = "gpt-4.1") -> int:
     """
     Estimate token count for DataFrame with conservative overhead for Azure OpenAI.
     
@@ -480,16 +472,15 @@ def conservative_token_estimation(
         Estimated tokens: 15,000
         
     Note:
-        Samples subset of rows, extrapolates to full dataset, applies 4x 
-        overhead.
-        Designed to prevent Azure OpenAI rate limit violations by being 
-        conservative.
+        Samples subset of rows, extrapolates to full dataset, applies 4x overhead.
+        Designed to prevent Azure OpenAI rate limit violations by being conservative.
     """
     
     if df is None or df.empty:
         return 1000  # Minimum estimate
     
     # Very conservative approach for 50k token limit
+    total_cells = df.shape[0] * df.shape[1]
     
     # Sample content to estimate average cell size
     sample_size = min(50, len(df))
@@ -523,16 +514,12 @@ def conservative_token_estimation(
     # Cap at reasonable maximum for single sheet
     estimated_tokens = min(estimated_tokens, 40000)  # Leave 10k buffer
     
-    print(
-        f"📊 Conservative estimate: {df.shape} -> {estimated_tokens:,} tokens"
-    )
+    print(f"📊 Conservative estimate: {df.shape} -> {estimated_tokens:,} tokens")
     return estimated_tokens
-
 
 def azure_safe_chunk_size(df: pd.DataFrame, max_tokens: int = 25000) -> int:
     """
-    Calculate safe chunk size for Azure OpenAI processing with conservative 
-    limits.
+    Calculate safe chunk size for Azure OpenAI processing with conservative limits.
     
     Determines optimal chunk size to stay well within Azure token limits
     while maximizing processing efficiency. Uses actual data sampling
@@ -540,8 +527,7 @@ def azure_safe_chunk_size(df: pd.DataFrame, max_tokens: int = 25000) -> int:
     
     Args:
         df (pd.DataFrame): DataFrame to be chunked
-        max_tokens (int, optional): Maximum tokens per chunk. 
-                                    Defaults to 25000.
+        max_tokens (int, optional): Maximum tokens per chunk. Defaults to 25000.
         
     Returns:
         int: Safe number of rows per chunk (minimum 5, maximum len(df))
@@ -567,9 +553,7 @@ def azure_safe_chunk_size(df: pd.DataFrame, max_tokens: int = 25000) -> int:
     # Count content
     sample_content = ""
     for _, row in sample_df.iterrows():
-        row_content = " ".join(
-            [str(cell) for cell in row if pd.notna(cell)]
-        )
+        row_content = " ".join([str(cell) for cell in row if pd.notna(cell)])
         sample_content += row_content + " "
     
     # Conservative token estimation
@@ -584,20 +568,12 @@ def azure_safe_chunk_size(df: pd.DataFrame, max_tokens: int = 25000) -> int:
     chunk_size = int(safe_tokens_per_chunk / tokens_per_row)
     chunk_size = max(3, min(chunk_size, 50, len(df)))  # Very small chunks
     
-    estimated_chunk_tokens = int(
-        tokens_per_row * chunk_size * overhead_factor
-    )
+    estimated_chunk_tokens = int(tokens_per_row * chunk_size * overhead_factor)
     
-    print(
-        f"🛡️  Azure-safe chunking: {chunk_size} rows/chunk "
-        f"(~{estimated_chunk_tokens:,} tokens)"
-    )
+    print(f"🛡️  Azure-safe chunking: {chunk_size} rows/chunk (~{estimated_chunk_tokens:,} tokens)")
     return chunk_size
 
-
-def get_adaptive_chunk_size(
-    df: pd.DataFrame, model_name: str = "gpt-4.1", max_tokens: int = 32000
-) -> int:
+def get_adaptive_chunk_size(df: pd.DataFrame, model_name: str = "gpt-4.1", max_tokens: int = 32000) -> int:
     """
     Calculate adaptive chunk size based on content complexity and model limits.
     
@@ -607,8 +583,7 @@ def get_adaptive_chunk_size(
     
     Args:
         df (pd.DataFrame): DataFrame to analyze for chunking
-        model_name (str, optional): Target model for processing. 
-                                    Defaults to "gpt-4.1".
+        model_name (str, optional): Target model for processing. Defaults to "gpt-4.1".
         max_tokens (int, optional): Model context limit. Defaults to 32000.
         
     Returns:
@@ -634,33 +609,21 @@ def get_adaptive_chunk_size(
     if sample_rows == 0:
         return 1
     sample = [
-        {
-            "row_index": int(idx), 
-            "values": [
-                str(cell) if pd.notna(cell) else "" 
-                for cell in df.loc[idx].tolist()
-            ]
-        }
+        {"row_index": int(idx), "values": [str(cell) if pd.notna(cell) else "" for cell in df.loc[idx].tolist()]}
         for idx in df.index[:sample_rows]
     ]
     enc = tiktoken.get_encoding("cl100k_base")
     token_count = len(enc.encode(json.dumps(sample)))
     avg_tokens_per_row = token_count / sample_rows
-    # Reserve 2k for prompt/overhead/response
-    usable_tokens = max_tokens - 2000  
+    usable_tokens = max_tokens - 2000  # Reserve 2k for prompt/overhead/response
     est_rows = int(usable_tokens // avg_tokens_per_row)
     # Clamp to [5, len(df)]
     chunk_size = max(5, min(est_rows, len(df)))
-    print(
-        f"🟢 Auto-selected chunk size: {chunk_size} rows "
-        f"(≈{int(avg_tokens_per_row*chunk_size):,} tokens per chunk)"
-    )
+    print(f"🟢 Auto-selected chunk size: {chunk_size} rows (≈{int(avg_tokens_per_row*chunk_size):,} tokens per chunk)")
     return chunk_size
 
-
-def print_chunk_token_sizes(
-    chunks: List[Any], model: str = "gpt-4", prefix: str = ""
-) -> None:
+def print_chunk_token_sizes(chunks: List[Any], model: str = "gpt-4", 
+                          prefix: str = "") -> None:
     """
     Print token size analysis for list of chunks (debugging utility).
     
@@ -685,22 +648,15 @@ def print_chunk_token_sizes(
         n_tokens = estimate_tokens(prompt_json, model=model)
         print(f"{prefix}Chunk {i+1}: {len(chunk)} rows, {n_tokens:,} tokens")
         if n_tokens > 32000:
-            print(
-                "  ⚠️ WARNING: This chunk exceeds 32k tokens! "
-                "GPT-4-32k context limit is ~32k."
-            )
+            print("  ⚠️ WARNING: This chunk exceeds 32k tokens! GPT-4-32k context limit is ~32k.")
         elif n_tokens > 50000:
-            print(
-                "  🚨 WARNING: This chunk exceeds 50k tokens! "
-                "Your model may error."
-            )
+            print("  🚨 WARNING: This chunk exceeds 50k tokens! Your model may error.")
 
 
 # === STRUCTURE & CACHING FUNCTIONS ===
 
-def compute_structure_signature_from_headers(
-    header_rows: List[List], n_cols: int
-) -> str:
+def compute_structure_signature_from_headers(header_rows: List[List], 
+                                           n_cols: int) -> str:
     """
     Generate MD5 signature for table structure based on headers and columns.
     
@@ -721,14 +677,9 @@ def compute_structure_signature_from_headers(
         >>> compute_structure_signature_from_headers(headers, 2)
         'a1b2c3d4e5f6789...'  # MD5 hash
     """
-    header_content = [
-        "|".join([
-            str(x).strip().lower() if x is not None else "" for x in row
-        ]) for row in header_rows
-    ]
+    header_content = ["|".join([str(x).strip().lower() if x is not None else "" for x in row]) for row in header_rows]
     signature_str = "|".join(header_content) + f"|n_cols={n_cols}"
     return hashlib.md5(signature_str.encode()).hexdigest()
-
 
 def to_list_of_float(val: Any) -> List[float]:
     """
@@ -766,47 +717,23 @@ def to_list_of_float(val: Any) -> List[float]:
             return []
     return []
 
-
-# === JSON SERIALIZATION FUNCTIONS ===
-
-def safe_json_serialize(obj):
-    """
-    Recursively serialize an object to be JSON-compatible.
-    
-    Handles common non-serializable types:
-    - datetime and pandas Timestamp objects
-    - numpy integer and float types
-    - Decimal objects
-    """
-    if isinstance(obj, dict):
-        return {k: safe_json_serialize(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [safe_json_serialize(item) for item in obj]
-    elif isinstance(obj, (pd.Timestamp, datetime)):
-        return obj.isoformat()
-    elif isinstance(obj, (np.int64, np.int32, np.int16, np.int8)):
-        return int(obj)
-    elif isinstance(obj, (np.float64, np.float32)):
-        return float(obj)
-    elif isinstance(obj, Decimal):
-        return float(obj)
-    else:
-        return obj
-
-
 def json_serialize_timestamps(obj):
-    """
-    Convert timestamps to ISO format strings in nested data structures.
+    """Convert timestamps to ISO format strings in nested data structures.
     
-    This function recursively traverses dictionaries and lists to find and 
-    convert pandas Timestamp or datetime objects to ISO format strings, 
-    making them JSON serializable.
+    This function recursively traverses dictionaries and lists to find and convert
+    pandas Timestamp or datetime objects to ISO format strings, making them JSON serializable.
     
     Args:
         obj: The object to serialize (dict, list, Timestamp, or other)
         
     Returns:
-        The same object structure with all Timestamp objects converted to 
-        strings
+        The same object structure with all Timestamp objects converted to strings
     """
-    return safe_json_serialize(obj)
+    if isinstance(obj, dict):
+        return {k: json_serialize_timestamps(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [json_serialize_timestamps(item) for item in obj]
+    elif isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+    else:
+        return obj

@@ -2,12 +2,14 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Table, Modal, Button, Tag, Space, Card, Statistic, message, Spin, Row, Col, Alert, Popconfirm } from 'antd';
-import { EyeOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Modal, Button, message, Spin, Row, Col, Alert, Popconfirm, Tabs } from 'antd';
+import { DeleteOutlined, ReloadOutlined, EyeOutlined } from '@ant-design/icons';
 import { usePolling, apiRequest } from '../../hooks/useApi';
 import type { JobStatus, ProcessedFile } from '../../types/api';
 import { useAppContext } from '@/context/AppContext';
-import type { ColumnsType } from 'antd/es/table';
+import BatchCard from '@/components/processing/BatchCard';
+import ProcessingStream from '@/components/processing/ProcessingStream';
+import ProgressIndicators from '@/components/processing/ProgressIndicators';
 
 // The JobItem now directly uses the JobStatus from context, ensuring type compatibility
 type JobItem = JobStatus & {
@@ -23,13 +25,14 @@ export default function ProcessingPage() {
   const { jobs, updateJob, loadJobs, jobsLoading } = useAppContext();
   const [initialLoading, setInitialLoading] = useState(true);
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [selectedJob, setSelectedJob] = useState<JobItem | null>(null);
+  const [selectedJob, setSelectedJob] = useState<JobStatus | null>(null);
   const [clearingJobs, setClearingJobs] = useState(false);
+  const [activeTab, setActiveTab] = useState('overview');
 
   // Ref to prevent duplicate execution in React Strict Mode
   const hasInitialized = useRef(false);
 
-  const showDetailsModal = (job: JobItem) => {
+  const showDetailsModal = (job: JobStatus) => {
     setSelectedJob(job);
     setIsModalVisible(true);
   };
@@ -62,6 +65,30 @@ export default function ProcessingPage() {
       message.error('Failed to clear jobs');
     } finally {
       setClearingJobs(false);
+    }
+  };
+
+  const handleJobAction = async (jobId: string, action: 'pause' | 'resume' | 'stop') => {
+    try {
+      message.loading(`${action.charAt(0).toUpperCase() + action.slice(1)}ing job...`, 0);
+      
+      // In a real implementation, this would call the appropriate API endpoint
+      await apiRequest(`/jobs/${jobId}/${action}`, {
+        method: 'POST',
+      });
+      
+      message.destroy();
+      message.success(`Job ${action}ed successfully`);
+      
+      // Update job status locally
+      const newStatus = action === 'pause' ? 'paused' : 
+                       action === 'resume' ? 'processing' : 'cancelled';
+      updateJob({ jobId, status: newStatus as any });
+      
+    } catch (error) {
+      message.destroy();
+      console.error(`Error ${action}ing job:`, error);
+      message.error(`Failed to ${action} job`);
     }
   };
 
@@ -180,91 +207,6 @@ export default function ProcessingPage() {
     }
   }, [statusData, updateJob]);
 
-  const getStatusColor = useCallback((status: string) => {
-    const colors: { [key: string]: string } = {
-      submitted: 'blue',
-      processing: 'orange',
-      completed: 'green',
-      error: 'red',
-      paused: 'purple',
-      cancelled: 'gray'
-    };
-    return colors[status] || 'default';
-  }, []);
-
-  const getProgressStatus = useCallback((status: string) => {
-    if (status === 'error') return 'exception';
-    if (status === 'completed') return 'success';
-    return 'active';
-  }, []);
-
-  const columns: ColumnsType<JobItem> = useMemo(() => [
-    { title: 'Job ID', dataIndex: 'jobId', key: 'jobId', width: 250, render: (id: string) => <span className="font-mono text-xs">{id}</span> },
-    { title: 'Batch ID', dataIndex: 'batchId', key: 'batchId', width: 250, render: (id: string) => <span className="font-mono text-xs">{id}</span> },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      width: 150,
-      key: 'status',
-      render: (status: string, record: JobItem) => (
-        <Space direction="vertical" size="small">
-          <Tag color={getStatusColor(status)}>{status.toUpperCase()}</Tag>
-          {record.status === 'processing' && record.current_file && (
-            <span className="text-xs text-gray-500">Processing: {record.current_file}</span>
-          )}
-        </Space>
-      )
-    },
-    {
-      title: 'Details',
-      key: 'details',
-      align: 'center' as const,
-      width: 120,
-      render: (_: any, record: JobItem) => (
-        <Button
-          icon={<EyeOutlined />}
-          onClick={() => showDetailsModal(record)}
-          disabled={!record.files || record.files.length === 0}
-        >
-          View Files
-        </Button>
-      ),
-    },
-    {
-      title: 'Date',
-      dataIndex: 'timestamp',
-      key: 'date',
-      width: 120,
-      render: (ts: string) => ts ? new Date(ts).toLocaleDateString() : 'N/A'
-    },
-    {
-      title: 'Time Taken',
-      key: 'timeTaken',
-      width: 120,
-      render: (_: any, record: JobItem) => {
-        if (!record.timestamp) return 'N/A';
-        if (record.status !== 'completed' && record.status !== 'error') {
-          return <Tag color="blue">In progress...</Tag>;
-        }
-        const start = new Date(record.timestamp).getTime();
-        const end = record.endTime ? new Date(record.endTime).getTime() : Date.now();
-        const duration = Math.round((end - start) / 1000);
-        
-        if (duration < 60) return `${duration}s`;
-        const minutes = Math.floor(duration / 60);
-        const seconds = duration % 60;
-        return `${minutes}m ${seconds}s`;
-      }
-    }
-  ], [getStatusColor]);
-
-  const stats = useMemo(() => ({
-    total: jobs.length,
-    processing: jobs.filter(j => j.status === 'processing').length,
-    completed: jobs.filter(j => j.status === 'completed').length,
-    errors: jobs.filter(j => j.status === 'error').length,
-  }), [jobs]);
-
   if (initialLoading) {
     return (
       <div className="p-6 flex justify-center items-center h-64">
@@ -275,54 +217,135 @@ export default function ProcessingPage() {
     );
   }
 
+  const tabItems = [
+    {
+      key: 'overview',
+      label: 'Overview',
+      children: (
+        <div className="space-y-6">
+          <ProgressIndicators jobs={jobs} />
+          <Row gutter={[16, 16]}>
+            <Col span={14}>
+              <div className="space-y-4">
+                {jobs.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-gray-600">No processing jobs found. Submit files from the Selection page.</p>
+                  </div>
+                ) : (
+                  jobs.map(job => (
+                    <BatchCard
+                      key={job.jobId}
+                      job={job}
+                      onViewDetails={showDetailsModal}
+                      onPause={(jobId) => handleJobAction(jobId, 'pause')}
+                      onResume={(jobId) => handleJobAction(jobId, 'resume')}
+                      onStop={(jobId) => handleJobAction(jobId, 'stop')}
+                    />
+                  ))
+                )}
+              </div>
+            </Col>
+            <Col span={10}>
+              <ProcessingStream jobs={jobs} />
+            </Col>
+          </Row>
+        </div>
+      )
+    },
+    {
+      key: 'batches',
+      label: 'Batch Details',
+      children: (
+        <div className="space-y-4">
+          {jobs.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-gray-600">No processing jobs found. Submit files from the Selection page.</p>
+            </div>
+          ) : (
+            jobs.map(job => (
+              <BatchCard
+                key={job.jobId}
+                job={job}
+                onViewDetails={showDetailsModal}
+                onPause={(jobId) => handleJobAction(jobId, 'pause')}
+                onResume={(jobId) => handleJobAction(jobId, 'resume')}
+                onStop={(jobId) => handleJobAction(jobId, 'stop')}
+              />
+            ))
+          )}
+        </div>
+      )
+    },
+    {
+      key: 'stream',
+      label: 'Live Stream',
+      children: (
+        <ProcessingStream 
+          jobs={jobs} 
+          maxEvents={200}
+          showFilters={true}
+          autoScroll={true}
+        />
+      )
+    }
+  ];
+
   return (
     <div className="p-6">
       <header className="mb-6">
         <div className="flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Processing Dashboard</h1>
-            <p className="text-gray-600">Monitor batch processing jobs</p>
+            <p className="text-gray-600">Monitor and manage batch processing jobs</p>
           </div>
-          {jobs.length > 0 && process.env.NODE_ENV === 'development' && (
-            <Popconfirm
-              title="Clear All Jobs"
-              description="Are you sure you want to clear all jobs? This action cannot be undone."
-              onConfirm={handleClearAllJobs}
-              okText="Yes, Clear All"
-              cancelText="Cancel"
-              okButtonProps={{ danger: true }}
+          <div className="flex space-x-2">
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={loadJobs}
+              loading={jobsLoading}
             >
-              <Button
-                danger
-                icon={<DeleteOutlined />}
-                loading={clearingJobs}
-                disabled={clearingJobs}
+              Refresh
+            </Button>
+            {jobs.length > 0 && process.env.NODE_ENV === 'development' && (
+              <Popconfirm
+                title="Clear All Jobs"
+                description="Are you sure you want to clear all jobs? This action cannot be undone."
+                onConfirm={handleClearAllJobs}
+                okText="Yes, Clear All"
+                cancelText="Cancel"
+                okButtonProps={{ danger: true }}
               >
-                Clear All Jobs
-              </Button>
-            </Popconfirm>
-          )}
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  loading={clearingJobs}
+                  disabled={clearingJobs}
+                >
+                  Clear All Jobs
+                </Button>
+              </Popconfirm>
+            )}
+          </div>
         </div>
       </header>
 
-      <Row gutter={16} className="mb-6">
-        <Col span={4}><Card><Statistic title="Total Jobs" value={stats.total} /></Card></Col>
-        <Col span={4}><Card><Statistic title="Processing" value={stats.processing} valueStyle={{ color: '#fa8c16' }} /></Card></Col>
-        <Col span={4}><Card><Statistic title="Completed" value={stats.completed} valueStyle={{ color: '#52c41a' }} /></Card></Col>
-        <Col span={4}><Card><Statistic title="Errors" value={stats.errors} valueStyle={{ color: '#ff4d4f' }} /></Card></Col>
-      </Row>
-
-      {pollingError && <Alert message="Polling Error" description={pollingError} type="error" showIcon className="mb-4" />}
-
-      <Card>
-        <Table
-          columns={columns}
-          dataSource={jobs.map(j => ({ ...j, id: j.jobId }))}
-          rowKey="id"
-          pagination={{ pageSize: 10 }}
-          locale={{ emptyText: 'No processing jobs found. Submit files from the Selection page.' }}
+      {pollingError && (
+        <Alert 
+          message="Polling Error" 
+          description={pollingError} 
+          type="error" 
+          showIcon 
+          className="mb-4" 
         />
-      </Card>
+      )}
+
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={tabItems}
+        size="large"
+        className="bg-white rounded-lg shadow-sm"
+      />
 
       {selectedJob && (
         <Modal
@@ -330,19 +353,43 @@ export default function ProcessingPage() {
           open={isModalVisible}
           onOk={handleModalClose}
           onCancel={handleModalClose}
+          width={800}
           footer={[
             <Button key="back" onClick={handleModalClose}>
               Close
             </Button>,
           ]}
         >
-          <ul className="list-disc list-inside pl-4">
-            {(selectedJob.files || []).map((file) => (
-              <li key={file.id} className="mb-2">
-                <strong>{file.name}</strong>: {file.sheets.join(', ') || 'All sheets'}
-              </li>
-            ))}
-          </ul>
+          <div className="space-y-4">
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <h4 className="font-semibold mb-2">Batch Information</h4>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="font-medium">Job ID:</span> {selectedJob.jobId}
+                </div>
+                <div>
+                  <span className="font-medium">Batch ID:</span> {selectedJob.batchId}
+                </div>
+                <div>
+                  <span className="font-medium">Status:</span> {selectedJob.status}
+                </div>
+                <div>
+                  <span className="font-medium">Started:</span> {new Date(selectedJob.timestamp).toLocaleString()}
+                </div>
+              </div>
+            </div>
+            
+            <div>
+              <h4 className="font-semibold mb-2">Files ({selectedJob.files?.length || 0})</h4>
+              <ul className="list-disc list-inside pl-4 space-y-1">
+                {(selectedJob.files || []).map((file) => (
+                  <li key={file.id} className="text-sm">
+                    <strong>{file.name}</strong>: {file.sheets.join(', ') || 'All sheets'}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
         </Modal>
       )}
     </div>

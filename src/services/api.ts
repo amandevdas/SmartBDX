@@ -106,15 +106,40 @@ export const apiClient = {
   },
 
   /**
+   * Get quick file analysis for processing preview
+   * Maps to: smartbdx_selection.quick_file_analysis()
+   */
+  async quickFileAnalysis(fileIds: string[]): Promise<any> {
+    console.log('📊 API Client: Getting quick file analysis via Databricks...');
+    return apiRequest('/databricks', {
+      method: 'POST',
+      body: JSON.stringify({
+        operation: 'quick_file_analysis',
+        parameters: {
+          file_ids: fileIds,
+          include_cost_estimate: true,
+          include_time_estimate: true,
+          include_cache_analysis: true
+        }
+      })
+    });
+  },
+
+  /**
    * Get batch processing strategy recommendations
    * Maps to: smartbdx_processing.azure_optimized_batch_orchestration()
    */
   async suggestBatchStrategy(fileIds: string[]): Promise<any> {
+    console.log('🎯 API Client: Getting batch strategy suggestions via Databricks...');
     return apiRequest('/databricks', {
       method: 'POST',
       body: JSON.stringify({
         operation: 'suggest_batch_strategy',
-        parameters: { file_ids: fileIds }
+        parameters: {
+          file_ids: fileIds,
+          optimize_for: 'cost_and_speed',
+          include_risk_assessment: true
+        }
       })
     });
   },
@@ -284,7 +309,7 @@ export const apiClient = {
    */
   async getCacheAnalytics(): Promise<any> {
     console.log('📊 API Client: Getting cache analytics via Databricks...');
-    const response = await apiRequest<{data: any}>('/databricks', {
+    const response = await apiRequest<{data: any}>('/get_cache_analytics', {
       method: 'POST',
       body: JSON.stringify({
         operation: 'get_cache_analytics',
@@ -305,7 +330,8 @@ export const apiClient = {
    * Maps to: smartbdx_monitoring system metrics
    */
   async getUsageAnalytics(): Promise<any> {
-    return apiRequest('/databricks', {
+    console.log('📊 API Client: Getting usage analytics via Databricks...');
+    const response = await apiRequest<{data: any}>('/get_usage_analytics', {
       method: 'POST',
       body: JSON.stringify({
         operation: 'get_usage_analytics',
@@ -316,6 +342,31 @@ export const apiClient = {
         }
       })
     });
+    
+    // Handle wrapped response format
+    return response?.data || response;
+  },
+
+  /**
+   * Get processing insights and predictive analytics
+   * Maps to: smartbdx_monitoring predictive analytics
+   */
+  async getProcessingInsights(): Promise<any> {
+    console.log('🔮 API Client: Getting processing insights via Databricks...');
+    const response = await apiRequest<{data: any}>('/get_processing_insights', {
+      method: 'POST',
+      body: JSON.stringify({
+        operation: 'get_processing_insights',
+        parameters: {
+          include_predictions: true,
+          include_patterns: true,
+          include_recommendations: true
+        }
+      })
+    });
+    
+    // Handle wrapped response format
+    return response?.data || response;
   },
 
   /**

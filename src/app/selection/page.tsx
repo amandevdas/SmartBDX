@@ -11,6 +11,9 @@ import type { FileItem, JobStatus, ProcessRequest, SmartFileSelection } from '@/
 import type { ColumnsType } from 'antd/es/table';
 import { useAppContext } from '@/context/AppContext';
 import { SheetSelector } from '@/components/selection/SheetSelector';
+import { SmartSelectionPanel } from '@/components/selection/SmartSelectionPanel';
+import { ProcessingPreview } from '@/components/selection/ProcessingPreview';
+import { AdvancedFilters } from '@/components/selection/AdvancedFilters';
 
 const { Search } = Input;
 
@@ -43,6 +46,9 @@ export default function SelectionPage() {
   const [smartSelectionLoading, setSmartSelectionLoading] = useState(false);
   const [showAIInsights, setShowAIInsights] = useState(true);
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
+  const [currentAlgorithm, setCurrentAlgorithm] = useState<string>('failed_first');
+  const [filteredFiles, setFilteredFiles] = useState<FileItem[]>([]);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   
   // FIXED: Atomic protection refs to prevent race conditions
   const hasInitialized = useRef(false);
@@ -185,7 +191,7 @@ export default function SelectionPage() {
   }, []);
 
   // FIXED: Optimized filtering with better performance
-  const filteredFiles = useMemo(() => {
+  const basicFilteredFiles = useMemo(() => {
     return files.filter(file => {
       const matchesSearch = file.name.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesStatus = statusFilter === 'all' || file.status === statusFilter;
@@ -214,6 +220,9 @@ export default function SelectionPage() {
       return matchesSearch && matchesStatus && matchesPriority;
     });
   }, [files, searchTerm, statusFilter, priorityFilter]);
+
+  // Use advanced filtered files if available, otherwise use basic filtered files
+  const displayFiles = filteredFiles.length > 0 ? filteredFiles : basicFilteredFiles;
 
   // FIXED: Memoized configuration for better performance
   const priorityBadgeConfig = useMemo(() => ({
@@ -284,7 +293,7 @@ export default function SelectionPage() {
   // FIXED: Improved select all with better state management
   const handleSelectAll = useCallback((checked: boolean) => {
     if (checked) {
-      const selectableFiles = filteredFiles.filter(file => file.status !== 'processing');
+      const selectableFiles = displayFiles.filter(file => file.status !== 'processing');
       setSelectedFiles(selectableFiles.map(f => f.id));
       // Don't modify selectedSheets - let user select sheets individually
     } else {
@@ -292,7 +301,7 @@ export default function SelectionPage() {
       setSelectedSheets({});
       setExpandedRowKeys([]);
     }
-  }, [filteredFiles]);
+  }, [displayFiles]);
 
   // FIXED: Enhanced validation function
   const validateFileSelections = useCallback((): string[] => {
@@ -411,12 +420,87 @@ export default function SelectionPage() {
     }
   }, [selectedFiles, selectedSheets, validateFileSelections, submitJob, router, addJob]);
 
+  // New handlers for smart selection components
+  const handleAlgorithmChange = useCallback(async (algorithm: string) => {
+    setCurrentAlgorithm(algorithm);
+    if (!isLoadingSmartSelectionRef.current) {
+      setSmartSelectionLoading(true);
+      isLoadingSmartSelectionRef.current = true;
+      
+      try {
+        const result = await apiClient.getSmartFileSelection({
+          max_items: 15,
+          priority_mode: algorithm as any
+        });
+        
+        if (isMountedRef.current) {
+          setSmartSelection(result);
+        }
+      } catch (error) {
+        console.warn('Failed to load smart selection:', error);
+        if (isMountedRef.current) {
+          message.warning('Failed to update smart selection', 3);
+        }
+      } finally {
+        isLoadingSmartSelectionRef.current = false;
+        if (isMountedRef.current) {
+          setSmartSelectionLoading(false);
+        }
+      }
+    }
+  }, []);
+
+  const handleApplySmartSelection = useCallback((selection: SmartFileSelection) => {
+    if (selection.recommended_files) {
+      const selectableFiles = selection.recommended_files.filter(fileId =>
+        files.find(f => f.id === fileId)?.status === 'ready'
+      );
+      
+      if (selectableFiles.length === 0) {
+        message.info('No recommended files are currently available for processing');
+        return;
+      }
+      
+      setSelectedFiles(selectableFiles);
+      message.success(`Applied smart selection: ${selectableFiles.length} files selected`);
+    }
+  }, [files]);
+
+  const handleAdvancedFiltersChange = useCallback((filtered: FileItem[]) => {
+    setFilteredFiles(filtered);
+  }, []);
+
+  const handleAdvancedFiltersReset = useCallback(() => {
+    setFilteredFiles([]);
+  }, []);
+
+  const handleAnalyzeFiles = useCallback(async () => {
+    if (selectedFiles.length === 0) {
+      message.warning('Please select files to analyze');
+      return;
+    }
+
+    try {
+      const analysis = await apiClient.quickFileAnalysis(selectedFiles);
+      console.log('File analysis result:', analysis);
+      message.success('File analysis completed');
+    } catch (error) {
+      console.error('Analysis failed:', error);
+      message.error('Failed to analyze files');
+    }
+  }, [selectedFiles]);
+
+  // Get selected file objects for preview
+  const selectedFileObjects = useMemo(() => {
+    return selectedFiles.map(id => files.find(f => f.id === id)).filter(Boolean) as FileItem[];
+  }, [selectedFiles, files]);
+
   // Enhanced table columns with AI insights - unchanged but with better error handling
   const columns: ColumnsType<FileItem> = useMemo(() => [
     {
       title: <Checkbox
-        checked={selectedFiles.length === filteredFiles.length && filteredFiles.length > 0}
-        indeterminate={selectedFiles.length > 0 && selectedFiles.length < filteredFiles.length}
+        checked={selectedFiles.length === displayFiles.length && displayFiles.length > 0}
+        indeterminate={selectedFiles.length > 0 && selectedFiles.length < displayFiles.length}
         onChange={(e) => handleSelectAll(e.target.checked)}
       />,
       dataIndex: 'select',
@@ -498,10 +582,10 @@ export default function SelectionPage() {
       render: (date: Date) => date ? new Date(date).toLocaleString() : '-',
       sorter: (a, b) => (new Date(a.lastModified || 0).getTime()) - (new Date(b.lastModified || 0).getTime()),
     },
-  ], [selectedFiles, filteredFiles, handleSelectAll, handleSelectFile, getPriorityBadge, getCacheIndicator, getAIRecommendation, formatProcessingTime]);
+  ], [selectedFiles, displayFiles, handleSelectAll, handleSelectFile, getPriorityBadge, getCacheIndicator, getAIRecommendation, formatProcessingTime]);
 
-  // Smart selection actions
-  const handleApplySmartSelection = useCallback(() => {
+  // Legacy smart selection action (kept for backward compatibility)
+  const handleLegacySmartSelection = useCallback(() => {
     if (!smartSelection?.recommended_files) {
       message.warning('No AI recommendations available');
       return;
@@ -573,63 +657,35 @@ export default function SelectionPage() {
           <p className="text-gray-600">Select files and sheets for processing with AI-powered insights and recommendations.</p>
         </header>
 
-        {/* AI Insights Dashboard */}
-        {showAIInsights && smartSelection && (
-          <Card className="mb-6" title={
-            <Space>
-              <StarOutlined style={{ color: '#1890ff' }} />
-              <span>AI Smart Selection Insights</span>
-              <Badge count={smartSelection.recommended_files?.length || 0} />
-            </Space>
-          }>
-            <Row gutter={16}>
-              <Col span={6}>
-                <Statistic
-                  title="Recommended Files"
-                  value={smartSelection.recommended_files?.length || 0}
-                  prefix={<RocketOutlined style={{ color: '#52c41a' }} />}
-                />
-              </Col>
-              <Col span={6}>
-                <Statistic
-                  title="Potential Cost Savings"
-                  value={smartSelection.cost_optimization?.potential_savings || 0}
-                  prefix={<DollarOutlined style={{ color: '#1890ff' }} />}
-                  precision={2}
-                />
-              </Col>
-              <Col span={6}>
-                <Statistic
-                  title="Cache Opportunities"
-                  value={smartSelection.cache_opportunities?.length || 0}
-                  prefix={<ThunderboltOutlined style={{ color: '#faad14' }} />}
-                />
-              </Col>
-              <Col span={6}>
-                <div>
-                  <Button
-                    type="primary"
-                    icon={<StarOutlined />}
-                    onClick={handleApplySmartSelection}
-                    disabled={!smartSelection.recommended_files?.length}
-                  >
-                    Apply Smart Selection
-                  </Button>
-                </div>
-              </Col>
-            </Row>
-            {smartSelection.cost_optimization?.cache_recommendations && (
-              <div style={{ marginTop: 16 }}>
-                <Alert
-                  message="AI Recommendations"
-                  description={smartSelection.cost_optimization.cache_recommendations.join('. ')}
-                  type="info"
-                  showIcon
-                />
-              </div>
-            )}
-          </Card>
+        {/* Smart Selection Panel */}
+        {showAIInsights && (
+          <SmartSelectionPanel
+            onAlgorithmChange={handleAlgorithmChange}
+            onApplySelection={handleApplySmartSelection}
+            smartSelection={smartSelection}
+            loading={smartSelectionLoading}
+            currentAlgorithm={currentAlgorithm}
+          />
         )}
+
+        {/* Processing Preview */}
+        {selectedFiles.length > 0 && (
+          <ProcessingPreview
+            selectedFiles={selectedFileObjects}
+            onStartProcessing={handleProcessFiles}
+            onAnalyzeFiles={handleAnalyzeFiles}
+            loading={submitLoading}
+            disabled={isProcessingRef.current}
+          />
+        )}
+
+        {/* Advanced Filters */}
+        <AdvancedFilters
+          files={basicFilteredFiles}
+          onFiltersChange={handleAdvancedFiltersChange}
+          onFiltersReset={handleAdvancedFiltersReset}
+          disabled={filesLoading}
+        />
 
         <div className="mb-4 bg-white p-4 rounded-lg border border-gray-200">
           <div className="flex justify-between items-center mb-3">
@@ -721,7 +777,7 @@ export default function SelectionPage() {
           <Spin spinning={filesLoading} tip="Loading files...">
             <Table
               columns={columns}
-              dataSource={filteredFiles}
+              dataSource={displayFiles}
               rowKey="id"
               pagination={{ showSizeChanger: true, showQuickJumper: true, pageSize: 20 }}
               scroll={{ x: 800 }}

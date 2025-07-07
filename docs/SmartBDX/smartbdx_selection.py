@@ -1,10 +1,10 @@
 """
-SmartBDX Manual Selection Module
-===============================
+SmartBDX Manual Selection Module (Cleaned)
+==========================================
 
 Discovery-based file and sheet selection system for SmartBDX.
 Provides efficient discovery, multiple selection modes, and lazy loading.
-Enhanced with visual dropdown interfaces and smart pre-selection.
+UI functions removed - contains only core business logic.
 
 Dependencies: smartbdx_config, smartbdx_utilities, smartbdx_infrastructure
 """
@@ -21,7 +21,6 @@ from collections import Counter
 # Third Party
 import pandas as pd
 from pyspark.sql import SparkSession
-from IPython.display import display, HTML
 
 # SmartBDX Modules
 from smartbdx_config import (
@@ -49,7 +48,74 @@ except NameError:
     except Exception:
         dbutils = None
 
-# === DISCOVERY FUNCTIONS ===
+# === API OPERATIONS ===
+
+# Get operation parameter
+dbutils.widgets.text("operation", "", "Operation Type")
+operation = dbutils.widgets.get("operation")
+
+if operation == "get_sheet_names":
+    # Use existing SmartBDX functions
+    dbutils.widgets.text("file_path", "", "File Path")
+    file_path = dbutils.widgets.get("file_path")
+    
+    if not file_path:
+        dbutils.notebook.exit(json.dumps({"error": "file_path required"}))
+    
+    try:
+        # Import your existing modules
+        from smartbdx_core_ai import copy_volume_file_to_tmp_via_spark
+        import pandas as pd
+        
+        # Use your existing utility function
+        local_path = copy_volume_file_to_tmp_via_spark(file_path)
+        xls = pd.ExcelFile(local_path)
+        sheet_names = xls.sheet_names
+        xls.close()
+        
+        # Clean up (your existing pattern)
+        import os
+        os.remove(local_path)
+        
+        print(f"✅ Extracted {len(sheet_names)} sheets from {file_path}")
+        dbutils.notebook.exit(json.dumps(sheet_names))
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        dbutils.notebook.exit(json.dumps({"error": str(e)}))
+
+elif operation == "list_files":
+    # Use existing file listing logic
+    dbutils.widgets.text("volume_path", "", "Volume Path")
+    volume_path = dbutils.widgets.get("volume_path")
+    
+    try:
+        # Your existing file listing pattern from smartbdx_core_ai.py
+        full_paths = [f.path for f in dbutils.fs.ls(volume_path) if f.name.lower().endswith(".xlsx")]
+        
+        files = []
+        for path in full_paths:
+            file_info = dbutils.fs.ls(path)[0]
+            files.append({
+                "id": file_info.name,
+                "file_name": file_info.name,
+                "status": "pending",
+                "last_modified": file_info.modificationTime,
+                "size": file_info.size,
+                "path": path
+            })
+        
+        print(f"✅ Found {len(files)} Excel files")
+        dbutils.notebook.exit(json.dumps(files))
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        dbutils.notebook.exit(json.dumps({"error": str(e)}))
+
+# If no API operation, continue with normal SmartBDX processing
+print("🚀 Continuing with normal SmartBDX processing...")
+
+# === CORE DISCOVERY FUNCTIONS ===
 
 def discover_files_and_sheets_metadata(volume_folder: str = DEFAULT_VOLUME_FOLDER) -> pd.DataFrame:
     """
@@ -76,8 +142,6 @@ def discover_files_and_sheets_metadata(volume_folder: str = DEFAULT_VOLUME_FOLDE
     Example:
         >>> metadata_df = discover_files_and_sheets_metadata()
         📊 Discovered 25 files with 87 sheets
-        >>> display(metadata_df)
-        # Shows rich table in Databricks with sorting/filtering
     """
     print(f"🔍 Discovering files and sheets in: {volume_folder}")
     
@@ -291,656 +355,7 @@ def _calculate_priority_score(file_name: str, sheet_name: str, file_size_mb: flo
     
     return round(score, 1)
 
-# === SELECTION FUNCTIONS ===
-
-def create_selection_widget(metadata_df: pd.DataFrame) -> None:
-    """
-    Create interactive Databricks widgets for file/sheet selection.
-    
-    Creates multi-select widgets for interactive selection with rich display
-    and filtering options.
-    
-    Args:
-        metadata_df (pd.DataFrame): Metadata from discover_files_and_sheets_metadata()
-        
-    Usage:
-        >>> metadata_df = discover_files_and_sheets_metadata()
-        >>> create_selection_widget(metadata_df)
-        # Creates interactive widgets in Databricks
-        >>> selected = get_widget_selections()
-    """
-    if dbutils is None:
-        print("❌ Widgets only available in Databricks environment")
-        return
-    
-    print("🎛️ Creating interactive selection widgets...")
-    
-    # Remove existing widgets
-    try:
-        dbutils.widgets.removeAll()
-    except:
-        pass
-    
-    # Status filter widget
-    status_options = ["all"] + list(metadata_df['processing_status'].unique())
-    dbutils.widgets.dropdown("status_filter", "all", status_options, 
-                            "🎯 Filter by Status")
-    
-    # File pattern widget
-    dbutils.widgets.text("file_pattern", "", "📁 File Pattern (e.g., Premium_*)")
-    
-    # Sheet pattern widget  
-    dbutils.widgets.text("sheet_pattern", "", "📄 Sheet Pattern (e.g., Summary)")
-    
-    # Max items widget
-    dbutils.widgets.text("max_items", "50", "🔢 Max Items to Select")
-    
-    # Priority filter widget
-    priority_options = ["all", "high_priority_only", "failed_first", "newest_first"]
-    dbutils.widgets.dropdown("priority_mode", "failed_first", priority_options,
-                            "⭐ Priority Mode")
-    
-    print("✅ Widgets created! Use the dropdowns above to filter, then run get_widget_selections()")
-    
-    # Display rich metadata table
-    display_selection_table(metadata_df)
-
-def get_widget_selections() -> List[Tuple[str, str]]:
-    """
-    Get selections from Databricks widgets and return filtered items.
-    
-    Returns:
-        List[Tuple[str, str]]: List of (file_name, sheet_name) tuples
-    """
-    if dbutils is None:
-        print("❌ Widgets only available in Databricks environment")
-        return []
-    
-    try:
-        # Get widget values
-        status_filter = dbutils.widgets.get("status_filter")
-        file_pattern = dbutils.widgets.get("file_pattern") 
-        sheet_pattern = dbutils.widgets.get("sheet_pattern")
-        max_items = int(dbutils.widgets.get("max_items") or 50)
-        priority_mode = dbutils.widgets.get("priority_mode")
-        
-        # Re-discover with current filters (fresh data)
-        metadata_df = discover_files_and_sheets_metadata()
-        
-        # Apply filters
-        selected_items = select_by_patterns(
-            metadata_df,
-            file_patterns=[file_pattern] if file_pattern else None,
-            sheet_patterns=[sheet_pattern] if sheet_pattern else None,
-            status_filter=status_filter if status_filter != "all" else None,
-            priority_mode=priority_mode if priority_mode != "all" else None,
-            max_items=max_items
-        )
-        
-        print(f"✅ Widget selection returned {len(selected_items)} items")
-        return selected_items
-        
-    except Exception as e:
-        print(f"❌ Error getting widget selections: {e}")
-        return []
-
-# === ENHANCED DROPDOWN FUNCTIONS ===
-
-def create_enhanced_dropdown_interface(volume_folder: str = DEFAULT_VOLUME_FOLDER) -> pd.DataFrame:
-    """
-    Enhanced dropdown interface with visual status indicators and smart pre-selection.
-    
-    Improves on the existing create_selection_widget() with:
-    - Visual status indicators in dropdown options
-    - Smart pre-selection of high-priority items
-    - Better organization and filtering
-    - Priority-based sorting
-    
-    Args:
-        volume_folder (str): Path to Databricks volume containing Excel files
-        
-    Returns:
-        pd.DataFrame: Enhanced metadata for selections
-    """
-    if dbutils is None:
-        print("❌ Enhanced widgets only available in Databricks environment")
-        return pd.DataFrame()
-    
-    print("🧠 Creating Enhanced Dropdown Selection Interface...")
-    
-    # Remove existing widgets
-    try:
-        dbutils.widgets.removeAll()
-    except:
-        pass
-    
-    # Discover files with metadata
-    print("🔍 Discovering files and enhanced metadata...")
-    metadata_df = discover_files_and_sheets_metadata(volume_folder)
-    
-    if metadata_df.empty:
-        print("❌ No files discovered")
-        return metadata_df
-    
-    # === ENHANCED FILE DROPDOWN WITH STATUS INDICATORS ===
-    file_options_with_status = _create_enhanced_file_options(metadata_df)
-    
-    # Smart pre-selection: prioritize failed/pending files
-    pre_selected_files = _get_smart_file_preselection(metadata_df, max_preselect=8)
-    
-    dbutils.widgets.multiselect(
-        name="enhanced_files",
-        defaultValue=",".join(pre_selected_files),
-        choices=file_options_with_status,
-        label="📁 Select Files (Smart Pre-selection with Status)"
-    )
-    
-    # === ENHANCED SHEET DROPDOWN WITH PRIORITY INDICATORS ===
-    sheet_options_with_priority = _create_enhanced_sheet_options(metadata_df)
-    
-    # Smart pre-selection: prioritize summary/main sheets
-    pre_selected_sheets = _get_smart_sheet_preselection(metadata_df)
-    
-    dbutils.widgets.multiselect(
-        name="enhanced_sheets",
-        defaultValue=",".join(pre_selected_sheets),
-        choices=sheet_options_with_priority,
-        label="📄 Select Sheets (Priority Pre-selection)"
-    )
-    
-    # === ENHANCED FILTER OPTIONS ===
-    
-    # Processing mode with descriptions
-    processing_modes = [
-        "🔥 failed_only → Only process failed items",
-        "⚡ failed_and_pending → Failed + pending items", 
-        "⏳ pending_only → Only pending items",
-        "⭐ high_priority → High priority score (≥80)",
-        "🎯 smart_selection → AI-recommended items",
-        "📊 all → Everything selected"
-    ]
-    
-    dbutils.widgets.dropdown(
-        name="enhanced_processing_mode",
-        defaultValue="⚡ failed_and_pending → Failed + pending items",
-        choices=processing_modes,
-        label="🎯 Processing Strategy"
-    )
-    
-    # Smart max items with recommendations
-    recommended_max = min(25, len(metadata_df[metadata_df['processing_status'].isin(['failed', 'pending'])]))
-    if recommended_max == 0:
-        recommended_max = min(10, len(metadata_df))
-    
-    dbutils.widgets.text(
-        name="enhanced_max_items",
-        defaultValue=str(recommended_max),
-        label=f"🔢 Max Items (Recommended: {recommended_max})"
-    )
-    
-    # Quick filter presets
-    quick_filters = [
-        "🎯 custom → Use selections above",
-        "🔥 failed_urgent → All failed items (urgent)",
-        "⚡ pending_batch → All pending items", 
-        "📊 last_week → Files from last 7 days",
-        "⭐ high_priority → Priority score ≥ 80",
-        "🧪 test_sample → Small test batch (5 items)"
-    ]
-    
-    dbutils.widgets.dropdown(
-        name="quick_filter_preset",
-        defaultValue="🎯 custom → Use selections above",
-        choices=quick_filters,
-        label="⚡ Quick Filter Presets"
-    )
-    
-    print("\n✅ Enhanced Dropdown Interface Created!")
-    print("🎯 Key Features:")
-    print("   📁 Files: Pre-selected high-priority items with status indicators")
-    print("   📄 Sheets: Priority sheets auto-selected (Summary, Total, Main, etc.)")
-    print("   🎯 Processing: Smart recommendations based on your data")
-    print("   ⚡ Quick Filters: One-click common scenarios")
-    
-    print("\n📋 Usage:")
-    print("1. Review pre-selections above (smart defaults applied)")
-    print("2. Adjust selections using dropdowns")
-    print("3. Run: selected = get_enhanced_dropdown_selections()")
-    print("4. Run: result = process_selected_items(client, selected)")
-    
-    # Display enhanced summary
-    _display_enhanced_summary(metadata_df)
-    
-    return metadata_df
-
-def get_enhanced_dropdown_selections() -> List[Tuple[str, str]]:
-    """
-    Get selections from enhanced dropdown interface with smart processing.
-    
-    Processes enhanced dropdown selections with:
-    - Status indicator parsing
-    - Smart filtering logic
-    - Quick preset handling
-    - Validation and error checking
-    
-    Returns:
-        List[Tuple[str, str]]: Selected (file_name, sheet_name) combinations
-    """
-    if dbutils is None:
-        print("❌ Enhanced widgets only available in Databricks environment")
-        return []
-    
-    try:
-        # Get widget values
-        selected_files_enhanced = dbutils.widgets.get("enhanced_files")
-        selected_sheets_enhanced = dbutils.widgets.get("enhanced_sheets")
-        processing_mode_enhanced = dbutils.widgets.get("enhanced_processing_mode")
-        max_items_str = dbutils.widgets.get("enhanced_max_items")
-        quick_filter = dbutils.widgets.get("quick_filter_preset")
-        
-        print("🧠 Enhanced Dropdown Selections:")
-        print(f"   Quick Filter: {quick_filter.split(' →')[0]}")
-        print(f"   Processing Mode: {processing_mode_enhanced.split(' →')[0]}")
-        
-        # Handle quick filter presets
-        if not quick_filter.startswith("🎯 custom"):
-            print("⚡ Applying quick filter preset...")
-            return _apply_quick_filter_preset(quick_filter)
-        
-        # Parse enhanced selections
-        selected_files = _parse_enhanced_file_selections(selected_files_enhanced)
-        selected_sheets = _parse_enhanced_sheet_selections(selected_sheets_enhanced)
-        
-        # Parse processing mode
-        processing_mode = processing_mode_enhanced.split(' →')[0].replace('🔥 ', '').replace('⚡ ', '').replace('⏳ ', '').replace('⭐ ', '').replace('🎯 ', '').replace('📊 ', '').strip()
-        
-        # Parse max items
-        try:
-            max_items = int(max_items_str) if max_items_str.strip() else 25
-        except:
-            max_items = 25
-        
-        print(f"   Files Selected: {len(selected_files)}")
-        print(f"   Sheets Selected: {len(selected_sheets)}")
-        print(f"   Max Items: {max_items}")
-        
-        if not selected_files or not selected_sheets:
-            print("⚠️ No valid selections made")
-            return []
-        
-        # Get fresh metadata for filtering
-        metadata_df = discover_files_and_sheets_metadata()
-        
-        # Apply enhanced filtering
-        selected_combinations = _apply_enhanced_filtering(
-            metadata_df, selected_files, selected_sheets, processing_mode, max_items
-        )
-        
-        print(f"✅ {len(selected_combinations)} combinations ready for processing")
-        
-        if selected_combinations:
-            _display_selection_preview(selected_combinations, metadata_df)
-        
-        return selected_combinations
-        
-    except Exception as e:
-        print(f"❌ Error getting enhanced selections: {e}")
-        return []
-
-# === ENHANCED HELPER FUNCTIONS ===
-
-def _create_enhanced_file_options(metadata_df: pd.DataFrame) -> List[str]:
-    """Create file dropdown options with visual status indicators."""
-    file_options = []
-    
-    for file_name in sorted(metadata_df['file_name'].unique()):
-        file_data = metadata_df[metadata_df['file_name'] == file_name]
-        
-        # Determine primary status for file
-        status_counts = file_data['processing_status'].value_counts()
-        max_priority = file_data['priority_score'].max()
-        
-        # Status icon logic
-        if 'failed' in status_counts:
-            icon = "🔥"  # Fire for failed (urgent)
-            priority = 1
-        elif 'pending' in status_counts:
-            icon = "⚡"  # Lightning for pending
-            priority = 2
-        elif status_counts.get('completed', 0) == len(file_data):
-            icon = "✅"  # Check for fully completed
-            priority = 4
-        else:
-            icon = "📋"  # Default
-            priority = 3
-        
-        # Add priority indicator for high-priority files
-        if max_priority >= 100:
-            icon = f"{icon}⭐"  # Add star for high priority
-            priority = max(1, priority - 1)  # Boost priority
-        
-        # Create display name
-        display_name = f"{icon} {file_name}"
-        file_options.append((priority, display_name, file_name))
-    
-    # Sort by priority (urgent first)
-    file_options.sort(key=lambda x: x[0])
-    
-    return [x[1] for x in file_options]
-
-def _create_enhanced_sheet_options(metadata_df: pd.DataFrame) -> List[str]:
-    """Create sheet dropdown options with priority indicators."""
-    sheet_options = []
-    
-    # Priority sheet patterns
-    priority_patterns = [
-        r'summary', r'total', r'main', r'data', r'overview', 
-        r'dashboard', r'report', r'consolidated', r'master'
-    ]
-    
-    for sheet_name in sorted(metadata_df['sheet_name'].unique()):
-        # Check if it's a priority sheet
-        is_priority = any(re.search(pattern, sheet_name.lower()) for pattern in priority_patterns)
-        
-        # Count failed/pending items for this sheet
-        sheet_data = metadata_df[metadata_df['sheet_name'] == sheet_name]
-        failed_count = len(sheet_data[sheet_data['processing_status'] == 'failed'])
-        pending_count = len(sheet_data[sheet_data['processing_status'] == 'pending'])
-        
-        if is_priority:
-            if failed_count > 0:
-                icon = "🔥⭐"  # Priority + failed
-                priority = 1
-            elif pending_count > 0:
-                icon = "⚡⭐"  # Priority + pending
-                priority = 2
-            else:
-                icon = "⭐"   # Priority
-                priority = 3
-        else:
-            if failed_count > 0:
-                icon = "🔥"   # Failed
-                priority = 4
-            elif pending_count > 0:
-                icon = "⚡"   # Pending
-                priority = 5
-            else:
-                icon = "📄"   # Regular
-                priority = 6
-        
-        display_name = f"{icon} {sheet_name}"
-        sheet_options.append((priority, display_name, sheet_name))
-    
-    # Sort by priority
-    sheet_options.sort(key=lambda x: x[0])
-    
-    return [x[1] for x in sheet_options]
-
-def _get_smart_file_preselection(metadata_df: pd.DataFrame, max_preselect: int = 8) -> List[str]:
-    """Smart pre-selection of high-priority files."""
-    # Priority order: failed > pending > high_priority > recent
-    priority_files = []
-    
-    # Get file options with status
-    file_options = _create_enhanced_file_options(metadata_df)
-    
-    # Pre-select up to max_preselect high-priority files
-    for display_name in file_options[:max_preselect]:
-        if any(indicator in display_name for indicator in ["🔥", "⚡", "⭐"]):
-            priority_files.append(display_name)
-    
-    return priority_files
-
-def _get_smart_sheet_preselection(metadata_df: pd.DataFrame) -> List[str]:
-    """Smart pre-selection of priority sheets."""
-    priority_sheets = []
-    
-    # Get sheet options with priority indicators
-    sheet_options = _create_enhanced_sheet_options(metadata_df)
-    
-    # Pre-select priority sheets (those with stars or high-priority indicators)
-    for display_name in sheet_options:
-        if "⭐" in display_name or display_name.startswith("🔥"):
-            priority_sheets.append(display_name)
-    
-    # Limit to reasonable number
-    return priority_sheets[:10]
-
-def _parse_enhanced_file_selections(selected_files_str: str) -> List[str]:
-    """Parse file selections and extract actual file names from display names."""
-    if not selected_files_str.strip():
-        return []
-    
-    selected_files = []
-    for display_name in selected_files_str.split(','):
-        display_name = display_name.strip()
-        if display_name:
-            # Extract actual file name by removing icons
-            clean_name = re.sub(r'^[🔥⚡✅📋⭐]+\s+', '', display_name)
-            selected_files.append(clean_name)
-    
-    return selected_files
-
-def _parse_enhanced_sheet_selections(selected_sheets_str: str) -> List[str]:
-    """Parse sheet selections and extract actual sheet names from display names."""
-    if not selected_sheets_str.strip():
-        return []
-    
-    selected_sheets = []
-    for display_name in selected_sheets_str.split(','):
-        display_name = display_name.strip()
-        if display_name:
-            # Extract actual sheet name by removing icons
-            clean_name = re.sub(r'^[🔥⚡📄⭐]+\s+', '', display_name)
-            selected_sheets.append(clean_name)
-    
-    return selected_sheets
-
-def _apply_enhanced_filtering(metadata_df: pd.DataFrame, selected_files: List[str], 
-                            selected_sheets: List[str], processing_mode: str, 
-                            max_items: int) -> List[Tuple[str, str]]:
-    """Apply enhanced filtering logic based on selections and processing mode."""
-    
-    # Filter by file and sheet selections
-    filtered_df = metadata_df[
-        (metadata_df['file_name'].isin(selected_files)) &
-        (metadata_df['sheet_name'].isin(selected_sheets))
-    ].copy()
-    
-    print(f"🔍 After file/sheet filter: {len(filtered_df)} items")
-    
-    # Apply processing mode filter
-    if processing_mode == "failed_only":
-        filtered_df = filtered_df[filtered_df['processing_status'] == 'failed']
-    elif processing_mode == "failed_and_pending":
-        filtered_df = filtered_df[filtered_df['processing_status'].isin(['failed', 'pending'])]
-    elif processing_mode == "pending_only":
-        filtered_df = filtered_df[filtered_df['processing_status'] == 'pending']
-    elif processing_mode == "high_priority":
-        filtered_df = filtered_df[filtered_df['priority_score'] >= 80]
-    elif processing_mode == "smart_selection":
-        # Smart selection: failed first, then high priority, then pending
-        filtered_df = filtered_df[
-            (filtered_df['processing_status'].isin(['failed', 'pending'])) |
-            (filtered_df['priority_score'] >= 80)
-        ]
-    # "all" mode: no additional filtering
-    
-    print(f"🎯 After processing mode filter ({processing_mode}): {len(filtered_df)} items")
-    
-    # Smart sorting
-    status_priority = {'failed': 0, 'pending': 1, 'unknown': 2, 'processing': 3, 'completed': 4}
-    filtered_df['status_rank'] = filtered_df['processing_status'].map(status_priority)
-    filtered_df = filtered_df.sort_values(['status_rank', 'priority_score'], ascending=[True, False])
-    
-    # Apply max items limit
-    if max_items > 0 and len(filtered_df) > max_items:
-        filtered_df = filtered_df.head(max_items)
-        print(f"🔢 Limited to top {max_items} items")
-    
-    return list(zip(filtered_df['file_name'], filtered_df['sheet_name']))
-
-def _apply_quick_filter_preset(quick_filter: str) -> List[Tuple[str, str]]:
-    """Apply quick filter presets for common scenarios."""
-    metadata_df = discover_files_and_sheets_metadata()
-    
-    if metadata_df.empty:
-        return []
-    
-    preset = quick_filter.split(' →')[0].strip()
-    
-    if preset == "🔥 failed_urgent":
-        # All failed items
-        selected = select_by_criteria(
-            metadata_df,
-            priority="failed_first",
-            exclude_completed=True
-        )
-        print(f"⚡ Quick Filter: Selected {len(selected)} failed items")
-        
-    elif preset == "⚡ pending_batch":
-        # All pending items
-        filtered_df = metadata_df[metadata_df['processing_status'] == 'pending']
-        selected = list(zip(filtered_df['file_name'], filtered_df['sheet_name']))
-        print(f"⚡ Quick Filter: Selected {len(selected)} pending items")
-        
-    elif preset == "📊 last_week":
-        # Files from last 7 days
-        from datetime import datetime, timedelta
-        week_ago = datetime.now() - timedelta(days=7)
-        recent_df = metadata_df[metadata_df['last_modified'] >= week_ago]
-        selected = list(zip(recent_df['file_name'], recent_df['sheet_name']))
-        print(f"⚡ Quick Filter: Selected {len(selected)} items from last week")
-        
-    elif preset == "⭐ high_priority":
-        # High priority items
-        high_priority_df = metadata_df[metadata_df['priority_score'] >= 80]
-        selected = list(zip(high_priority_df['file_name'], high_priority_df['sheet_name']))
-        print(f"⚡ Quick Filter: Selected {len(selected)} high-priority items")
-        
-    elif preset == "🧪 test_sample":
-        # Small test batch
-        selected = select_by_criteria(
-            metadata_df,
-            priority="failed_first",
-            max_items=5
-        )
-        print(f"⚡ Quick Filter: Selected {len(selected)} items for testing")
-        
-    else:
-        selected = []
-    
-    return selected
-
-def _display_enhanced_summary(metadata_df: pd.DataFrame) -> None:
-    """Display enhanced summary with visual indicators."""
-    print("\n🧠 Enhanced Selection Summary:")
-    
-    # Status breakdown with icons
-    status_counts = metadata_df['processing_status'].value_counts()
-    print("📊 Status Breakdown:")
-    for status, count in status_counts.items():
-        if status == 'failed':
-            icon = "🔥"
-        elif status == 'pending':
-            icon = "⚡"
-        elif status == 'completed':
-            icon = "✅"
-        else:
-            icon = "📋"
-        print(f"   {icon} {status.title()}: {count} items")
-    
-    # Priority analysis
-    high_priority = len(metadata_df[metadata_df['priority_score'] >= 80])
-    urgent_items = len(metadata_df[metadata_df['processing_status'].isin(['failed', 'pending'])])
-    
-    print(f"\n⭐ Priority Analysis:")
-    print(f"   🔥 Urgent (failed/pending): {urgent_items} items")
-    print(f"   ⭐ High Priority (score ≥80): {high_priority} items")
-    print(f"   📊 Total Available: {len(metadata_df)} items")
-    
-    # Top priority files preview
-    if high_priority > 0:
-        top_files = metadata_df[metadata_df['priority_score'] >= 80].groupby('file_name')['priority_score'].max().sort_values(ascending=False).head(3)
-        print(f"\n🎯 Top Priority Files:")
-        for file_name, score in top_files.items():
-            print(f"   🔥 {file_name} (score: {score})")
-
-def _display_selection_preview(selected_combinations: List[Tuple[str, str]], 
-                             metadata_df: pd.DataFrame) -> None:
-    """Display preview of selected items."""
-    if len(selected_combinations) <= 10:
-        print("\n📋 Selected Items Preview:")
-        for i, (file_name, sheet_name) in enumerate(selected_combinations, 1):
-            # Get status for this combination
-            item_data = metadata_df[
-                (metadata_df['file_name'] == file_name) & 
-                (metadata_df['sheet_name'] == sheet_name)
-            ]
-            
-            if not item_data.empty:
-                status = item_data.iloc[0]['processing_status']
-                score = item_data.iloc[0]['priority_score']
-                
-                if status == 'failed':
-                    icon = "🔥"
-                elif status == 'pending':
-                    icon = "⚡"
-                else:
-                    icon = "📋"
-                
-                print(f"   {i:2d}. {icon} {file_name} | {sheet_name} (score: {score})")
-    else:
-        print(f"\n📋 Selected {len(selected_combinations)} items (too many to preview)")
-        
-        # Show breakdown by status
-        status_breakdown = {}
-        for file_name, sheet_name in selected_combinations:
-            item_data = metadata_df[
-                (metadata_df['file_name'] == file_name) & 
-                (metadata_df['sheet_name'] == sheet_name)
-            ]
-            if not item_data.empty:
-                status = item_data.iloc[0]['processing_status']
-                status_breakdown[status] = status_breakdown.get(status, 0) + 1
-        
-        print("   Status breakdown of selections:")
-        for status, count in status_breakdown.items():
-            if status == 'failed':
-                icon = "🔥"
-            elif status == 'pending':
-                icon = "⚡"
-            else:
-                icon = "📋"
-            print(f"     {icon} {status}: {count} items")
-
-def display_selection_table(metadata_df: pd.DataFrame, max_display: int = 100) -> None:
-    """
-    Display rich metadata table for visual selection.
-    
-    Args:
-        metadata_df (pd.DataFrame): Metadata to display
-        max_display (int): Maximum rows to display
-    """
-    display_df = metadata_df.head(max_display).copy()
-    
-    # Format for better display
-    if 'last_modified' in display_df.columns:
-        display_df['last_modified'] = display_df['last_modified'].dt.strftime('%Y-%m-%d %H:%M')
-    
-    # Add selection helper column
-    display_df['select_key'] = display_df['file_name'] + " | " + display_df['sheet_name']
-    
-    # Reorder columns for better UX
-    column_order = [
-        'select_key', 'processing_status', 'priority_score', 
-        'file_size_mb', 'estimated_rows', 'last_modified', 
-        'base_file_name'
-    ]
-    display_df = display_df[[col for col in column_order if col in display_df.columns]]
-    
-    print(f"📊 Showing top {len(display_df)} items (sorted by priority):")
-    display(display_df)
+# === CORE SELECTION FUNCTIONS ===
 
 def select_by_patterns(metadata_df: pd.DataFrame,
                       file_patterns: Optional[List[str]] = None,
@@ -1118,6 +533,104 @@ def select_by_criteria(metadata_df: pd.DataFrame,
     
     print(f"🎯 Smart selection complete: {len(selected_items)} items")
     return selected_items
+
+# === HELPER FUNCTIONS FOR ENHANCED FILTERING ===
+
+def _apply_enhanced_filtering(metadata_df: pd.DataFrame, selected_files: List[str], 
+                            selected_sheets: List[str], processing_mode: str, 
+                            max_items: int) -> List[Tuple[str, str]]:
+    """Apply enhanced filtering logic based on selections and processing mode."""
+    
+    # Filter by file and sheet selections
+    filtered_df = metadata_df[
+        (metadata_df['file_name'].isin(selected_files)) &
+        (metadata_df['sheet_name'].isin(selected_sheets))
+    ].copy()
+    
+    print(f"🔍 After file/sheet filter: {len(filtered_df)} items")
+    
+    # Apply processing mode filter
+    if processing_mode == "failed_only":
+        filtered_df = filtered_df[filtered_df['processing_status'] == 'failed']
+    elif processing_mode == "failed_and_pending":
+        filtered_df = filtered_df[filtered_df['processing_status'].isin(['failed', 'pending'])]
+    elif processing_mode == "pending_only":
+        filtered_df = filtered_df[filtered_df['processing_status'] == 'pending']
+    elif processing_mode == "high_priority":
+        filtered_df = filtered_df[filtered_df['priority_score'] >= 80]
+    elif processing_mode == "smart_selection":
+        # Smart selection: failed first, then high priority, then pending
+        filtered_df = filtered_df[
+            (filtered_df['processing_status'].isin(['failed', 'pending'])) |
+            (filtered_df['priority_score'] >= 80)
+        ]
+    # "all" mode: no additional filtering
+    
+    print(f"🎯 After processing mode filter ({processing_mode}): {len(filtered_df)} items")
+    
+    # Smart sorting
+    status_priority = {'failed': 0, 'pending': 1, 'unknown': 2, 'processing': 3, 'completed': 4}
+    filtered_df['status_rank'] = filtered_df['processing_status'].map(status_priority)
+    filtered_df = filtered_df.sort_values(['status_rank', 'priority_score'], ascending=[True, False])
+    
+    # Apply max items limit
+    if max_items > 0 and len(filtered_df) > max_items:
+        filtered_df = filtered_df.head(max_items)
+        print(f"🔢 Limited to top {max_items} items")
+    
+    return list(zip(filtered_df['file_name'], filtered_df['sheet_name']))
+
+def _apply_quick_filter_preset(quick_filter: str) -> List[Tuple[str, str]]:
+    """Apply quick filter presets for common scenarios."""
+    metadata_df = discover_files_and_sheets_metadata()
+    
+    if metadata_df.empty:
+        return []
+    
+    preset = quick_filter.split(' →')[0].strip()
+    
+    if preset == "🔥 failed_urgent":
+        # All failed items
+        selected = select_by_criteria(
+            metadata_df,
+            priority="failed_first",
+            exclude_completed=True
+        )
+        print(f"⚡ Quick Filter: Selected {len(selected)} failed items")
+        
+    elif preset == "⚡ pending_batch":
+        # All pending items
+        filtered_df = metadata_df[metadata_df['processing_status'] == 'pending']
+        selected = list(zip(filtered_df['file_name'], filtered_df['sheet_name']))
+        print(f"⚡ Quick Filter: Selected {len(selected)} pending items")
+        
+    elif preset == "📊 last_week":
+        # Files from last 7 days
+        from datetime import datetime, timedelta
+        week_ago = datetime.now() - timedelta(days=7)
+        recent_df = metadata_df[metadata_df['last_modified'] >= week_ago]
+        selected = list(zip(recent_df['file_name'], recent_df['sheet_name']))
+        print(f"⚡ Quick Filter: Selected {len(selected)} items from last week")
+        
+    elif preset == "⭐ high_priority":
+        # High priority items
+        high_priority_df = metadata_df[metadata_df['priority_score'] >= 80]
+        selected = list(zip(high_priority_df['file_name'], high_priority_df['sheet_name']))
+        print(f"⚡ Quick Filter: Selected {len(selected)} high-priority items")
+        
+    elif preset == "🧪 test_sample":
+        # Small test batch
+        selected = select_by_criteria(
+            metadata_df,
+            priority="failed_first",
+            max_items=5
+        )
+        print(f"⚡ Quick Filter: Selected {len(selected)} items for testing")
+        
+    else:
+        selected = []
+    
+    return selected
 
 # === LOADING FUNCTIONS ===
 
@@ -1391,96 +904,91 @@ def quick_select_and_process(volume_folder: str = DEFAULT_VOLUME_FOLDER,
     
     return result
 
-def interactive_selection_workflow(volume_folder: str = DEFAULT_VOLUME_FOLDER) -> None:
-    """
-    Interactive workflow for Databricks notebooks.
-    
-    Example:
-        >>> interactive_selection_workflow()
-        # Creates widgets and displays selection table
-        # User interacts with widgets
-        # Then run: selected = get_widget_selections()
-    """
-    print("🎛️ Interactive Selection Workflow")
-    print("1. Discovering files and sheets...")
-    
-    metadata_df = discover_files_and_sheets_metadata(volume_folder)
-    
-    if metadata_df.empty:
-        print("❌ No files found")
-        return
-    
-    print("2. Creating selection interface...")
-    create_selection_widget(metadata_df)
-    
-    print("\n📋 Next steps:")
-    print("   1. Use the widgets above to filter your selection")
-    print("   2. Review the table below") 
-    print("   3. Run: selected = get_widget_selections()")
-    print("   4. Run: result = process_selected_items(client, selected)")
+# === PARSING HELPER FUNCTIONS ===
 
-def enhanced_quick_workflow(volume_folder: str = DEFAULT_VOLUME_FOLDER) -> None:
-    """
-    Enhanced quick workflow with better UI.
+def _parse_enhanced_file_selections(selected_files_str: str) -> List[str]:
+    """Parse file selections and extract actual file names from display names."""
+    if not selected_files_str.strip():
+        return []
     
-    Example:
-        >>> enhanced_quick_workflow()
-        # Creates enhanced dropdowns with smart pre-selection
-        # User adjusts selections
-        # Then run: selected = get_enhanced_dropdown_selections()
-        # Finally: result = process_selected_items(client, selected)
-    """
-    print("🧠 Enhanced SmartBDX Selection Workflow")
-    metadata_df = create_enhanced_dropdown_interface(volume_folder)
+    selected_files = []
+    for display_name in selected_files_str.split(','):
+        display_name = display_name.strip()
+        if display_name:
+            # Extract actual file name by removing icons
+            clean_name = re.sub(r'^[🔥⚡✅📋⭐]+\s+', '', display_name)
+            selected_files.append(clean_name)
     
-    if not metadata_df.empty:
-        print("\n📋 Enhanced Workflow Ready!")
-        print("1. ⬆️ Review smart pre-selections above")
-        print("2. 🎛️ Adjust using enhanced dropdowns") 
-        print("3. ⚡ Try quick filter presets for common scenarios")
-        print("4. 📝 Run: selected = get_enhanced_dropdown_selections()")
-        print("5. 🚀 Run: result = process_selected_items(client, selected)")
+    return selected_files
 
-# === MODULE INFORMATION ===
+def _parse_enhanced_sheet_selections(selected_sheets_str: str) -> List[str]:
+    """Parse sheet selections and extract actual sheet names from display names."""
+    if not selected_sheets_str.strip():
+        return []
+    
+    selected_sheets = []
+    for display_name in selected_sheets_str.split(','):
+        display_name = display_name.strip()
+        if display_name:
+            # Extract actual sheet name by removing icons
+            clean_name = re.sub(r'^[🔥⚡📄⭐]+\s+', '', display_name)
+            selected_sheets.append(clean_name)
+    
+    return selected_sheets
 
-def get_selection_status() -> Dict[str, Any]:
-    """Get selection module status and capabilities."""
-    return {
-        "module": "smartbdx_selection",
-        "version": "1.1 (Enhanced)",
-        "functions": [
-            "discover_files_and_sheets_metadata", "create_selection_widget",
-            "select_by_patterns", "select_by_criteria", "load_selected_files_only",
-            "process_selected_items", "quick_select_and_process"
-        ],
-        "enhanced_functions": [
-            "create_enhanced_dropdown_interface", "get_enhanced_dropdown_selections",
-            "enhanced_quick_workflow"
-        ],
-        "features": [
-            "Visual status indicators", "Smart pre-selection", "Quick filter presets",
-            "Priority-based sorting", "Enhanced UI elements"
-        ],
-        "dependencies": ["smartbdx_config", "smartbdx_utilities", "smartbdx_infrastructure"],
-        "status": "ready"
-    }
+def _get_smart_file_preselection(metadata_df: pd.DataFrame, max_preselect: int = 8) -> List[str]:
+    """Smart pre-selection of high-priority files."""
+    # Priority order: failed > pending > high_priority > recent
+    priority_files = []
+    
+    # Get files with failed status first
+    failed_files = metadata_df[metadata_df['processing_status'] == 'failed']['file_name'].unique()
+    priority_files.extend(failed_files[:max_preselect//2])
+    
+    # Get files with pending status
+    if len(priority_files) < max_preselect:
+        pending_files = metadata_df[metadata_df['processing_status'] == 'pending']['file_name'].unique()
+        remaining_slots = max_preselect - len(priority_files)
+        priority_files.extend([f for f in pending_files if f not in priority_files][:remaining_slots])
+    
+    # Get high priority files
+    if len(priority_files) < max_preselect:
+        high_priority_files = metadata_df[metadata_df['priority_score'] >= 90]['file_name'].unique()
+        remaining_slots = max_preselect - len(priority_files)
+        priority_files.extend([f for f in high_priority_files if f not in priority_files][:remaining_slots])
+    
+    return priority_files[:max_preselect]
 
-def get_enhanced_selection_status() -> Dict[str, Any]:
-    """Get enhanced selection module status and capabilities."""
-    return {
-        "module": "smartbdx_selection (enhanced)",
-        "version": "1.1",
-        "enhanced_functions": [
-            "create_enhanced_dropdown_interface", "get_enhanced_dropdown_selections",
-            "enhanced_quick_workflow"
-        ],
-        "features": [
-            "Visual status indicators", "Smart pre-selection", "Quick filter presets",
-            "Priority-based sorting", "Enhanced UI elements"
-        ],
-        "status": "ready"
-    }
+def _get_smart_sheet_preselection(metadata_df: pd.DataFrame) -> List[str]:
+    """Smart pre-selection of priority sheets."""
+    priority_patterns = [
+        r'summary', r'total', r'main', r'data', r'overview', 
+        r'dashboard', r'report', r'consolidated', r'master'
+    ]
+    
+    priority_sheets = []
+    all_sheets = metadata_df['sheet_name'].unique()
+    
+    # First, get sheets that match priority patterns
+    for sheet_name in all_sheets:
+        is_priority = any(re.search(pattern, sheet_name.lower()) for pattern in priority_patterns)
+        if is_priority:
+            priority_sheets.append(sheet_name)
+    
+    # Then, get sheets with failed status
+    failed_sheets = metadata_df[metadata_df['processing_status'] == 'failed']['sheet_name'].unique()
+    for sheet in failed_sheets:
+        if sheet not in priority_sheets:
+            priority_sheets.append(sheet)
+    
+    # Limit to reasonable number
+    return priority_sheets[:10]
 
-print("✅ SmartBDX Selection module loaded successfully")
-print("💡 Try: interactive_selection_workflow() for guided selection")
-print("🧠 Try: enhanced_quick_workflow() for the enhanced experience")
+print("✅ SmartBDX Selection module (cleaned) loaded successfully")
+print("🔧 Available functions:")
+print("   📊 discover_files_and_sheets_metadata() - Core discovery")
+print("   🎯 select_by_patterns() - Pattern-based selection")
+print("   🧠 select_by_criteria() - Smart criteria-based selection")
+print("   📂 load_selected_files_only() - Efficient loading")
+print("   🚀 process_selected_items() - Full processing pipeline")
+print("   ⚡ quick_select_and_process() - One-command workflow")
