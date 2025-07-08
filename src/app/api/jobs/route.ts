@@ -1,36 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSuccessResponse, createErrorResponse } from '@/lib/databricks-client';
-import { getAllJobs } from '@/lib/redis-job-store';
+import { getAllJobs, clearAllJobs } from '@/lib/redis-job-store';
 
 export async function GET(request: NextRequest) {
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-  console.log(`[${requestId}] 📥 Received GET request to /api/jobs`);
-
   try {
+    console.log('📋 API: Getting all jobs from Redis...');
     const jobs = await getAllJobs();
+    console.log(`📋 API: Found ${jobs.length} jobs in Redis`);
     
-    // Convert Redis jobs to JobStatus format
-    const jobsData = jobs.map(redisJob => ({
-      jobId: redisJob.id, // Use id instead of jobId
-      status: redisJob.status,
-      progress: ('progress' in redisJob ? redisJob.progress : 0),
-      message: redisJob.message,
-      batchId: redisJob.batchId,
-      timestamp: redisJob.timestamp || redisJob.createdAt,
-      endTime: ('endTime' in redisJob ? redisJob.endTime : undefined),
-      files: redisJob.files || [], // Ensure the files array is always present
-    }));
-
-    console.log(`[${requestId}] ✅ Retrieved ${jobsData.length} jobs from Redis`);
-    return createSuccessResponse(jobsData);
-
+    return NextResponse.json(jobs);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-    console.error(`[${requestId}] ❌ Error in GET /api/jobs:`, error);
-    return createErrorResponse(errorMessage, requestId);
+    console.error('❌ API: Error getting jobs:', error);
+    return NextResponse.json(
+      { error: 'Failed to load jobs' }, 
+      { status: 500 }
+    );
   }
 }
 
-export async function OPTIONS(request: NextRequest) {
-  return createSuccessResponse({});
+export async function DELETE(request: NextRequest) {
+  try {
+    console.log('🗑️ API: Clearing all jobs from Redis...');
+    const result = await clearAllJobs();
+    console.log(`🗑️ API: Cleared ${result.deletedCount} jobs`);
+    
+    return NextResponse.json({
+      success: true,
+      data: result,
+      message: `Successfully cleared ${result.deletedCount} jobs`
+    });
+  } catch (error) {
+    console.error('❌ API: Error clearing jobs:', error);
+    return NextResponse.json(
+      { error: 'Failed to clear jobs' }, 
+      { status: 500 }
+    );
+  }
 }

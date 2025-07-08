@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server';
 import { DatabricksClient, createSuccessResponse, createErrorResponse } from '@/lib/databricks-client';
+import { addJob } from '@/lib/redis-job-store';
+import type { JobStatus } from '@/types/api';
 
 export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
@@ -8,35 +10,18 @@ export async function POST(request: NextRequest) {
   try {
     const { parameters } = await request.json();
     
-    if (process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'true') {
-      console.log(`[${requestId}] 🧪 Using mock data for process_files`);
-      const mockData = {
-        success: true,
-        data: {
-          batch_id: `batch-${Date.now()}`,
-          status: "submitted",
-          files_count: parameters?.files?.length || 0,
-          submitted_at: new Date().toISOString()
-        }
-      };
-      return createSuccessResponse(mockData);
-    }
+    // Execute real backend operation only
 
     const client = new DatabricksClient(requestId);
     const result = await client.executeOperation('process_files', parameters);
 
-    if (!result || !result.success) {
-      console.error(`[${requestId}] ❌ SmartBDX operation unsuccessful:`, result);
-      return createErrorResponse(result?.error || 'SmartBDX operation failed', requestId, 500, { operation: 'process_files' });
-    }
-
-    console.log(`[${requestId}] ✅ Process files operation completed successfully`);
-    let processedResult = result;
+    console.log(`[${requestId}] 🔍 Raw result from executeOperation:`, JSON.stringify(result, null, 2));
 
     // SPECIAL CASE: Databricks returns success:false but real data is in "error" field as JSON string
-    if (processedResult && processedResult.success === false && processedResult.error) {
+    let processedResult = result;
+    if (result && result.success === false && result.error) {
       try {
-        const errorParsed = JSON.parse(processedResult.error);
+        const errorParsed = JSON.parse(result.error);
         if (errorParsed && errorParsed.success === true) {
           console.log(`[${requestId}] 🔄 Found real data in error field, using parsed data`);
           processedResult = errorParsed;
@@ -46,9 +31,41 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    console.log(`[${requestId}] 🔍 Processed result:`, JSON.stringify(processedResult, null, 2));
+
     if (!processedResult || !processedResult.success) {
       console.error(`[${requestId}] ❌ SmartBDX operation unsuccessful after parsing:`, processedResult);
       return createErrorResponse(processedResult?.error || 'SmartBDX operation failed', requestId, 500, { operation: 'process_files' });
+    }
+
+    console.log(`[${requestId}] ✅ Process files operation completed successfully`);
+
+    // Extract batch ID and create job record
+    const batchData = processedResult.data || processedResult;
+    const batchId = batchData?.batch_id || batchData?.jobId || `batch-${Date.now()}`;
+    
+    // Create job status for persistence
+    const jobStatus: JobStatus = {
+      jobId: batchId,
+      batchId: batchId,
+      status: 'submitted' as const,
+      timestamp: new Date().toISOString(),
+      message: 'Job submitted successfully',
+      files: parameters?.files?.map((f: any) => ({
+        id: f.fileId,
+        name: f.fileId,
+        sheets: f.sheets || []
+      })) || []
+    };
+
+    // Persist job to Redis for tracking
+    try {
+      console.log(`[${requestId}] 💾 Persisting job ${batchId} to Redis...`);
+      await addJob(jobStatus, batchId, Date.now());
+      console.log(`[${requestId}] ✅ Job persisted to Redis successfully`);
+    } catch (jobError) {
+      console.error(`[${requestId}] ⚠️ Failed to persist job to Redis:`, jobError);
+      // Don't fail the request if Redis persistence fails
     }
 
     console.log(`[${requestId}] ✅ Returning successful result for operation: process_files`);

@@ -11,7 +11,7 @@ interface UseSmartBDXApiResult<T> {
 }
 
 /**
- * Enhanced API hook for SmartBDX API with full Databricks integration
+ * Enhanced API hook for SmartBDX API - Only backend-supported operations
  * @returns API hook with data, loading, error states and execute/reset functions
  */
 export function useSmartBDXApi<T>(): UseSmartBDXApiResult<T> {
@@ -28,13 +28,10 @@ export function useSmartBDXApi<T>(): UseSmartBDXApiResult<T> {
 
       let result: T;
       
-      // Route to appropriate apiClient method based on operation
+      // Route to appropriate apiClient method based on operation - ONLY SUPPORTED OPERATIONS
       switch (operation) {
         case 'discover_files_with_sheets':
           result = await apiClient.discoverFilesWithSheets() as T;
-          break;
-        case 'smart_file_selection':
-          result = await apiClient.getSmartFileSelection(requestData || {}) as T;
           break;
         case 'process_files':
           result = await apiClient.submitProcessingJob(requestData) as T;
@@ -42,29 +39,14 @@ export function useSmartBDXApi<T>(): UseSmartBDXApiResult<T> {
         case 'get_batch_status':
           result = await apiClient.getBatchStatus(requestData?.batch_id) as T;
           break;
-        case 'get_cache_analytics':
-          result = await apiClient.getCacheAnalytics() as T;
-          break;
-        case 'get_usage_analytics':
-          result = await apiClient.getUsageAnalytics() as T;
-          break;
-        case 'get_processing_insights':
-          result = await apiClient.getProcessingInsights() as T;
-          break;
-        case 'check_processing_status':
-          result = await apiClient.checkProcessingStatus(requestData?.file_ids || []) as T;
-          break;
-        case 'quick_file_analysis':
-          result = await apiClient.quickFileAnalysis(requestData?.file_ids || []) as T;
-          break;
-        case 'suggest_batch_strategy':
-          result = await apiClient.suggestBatchStrategy(requestData?.file_ids || []) as T;
-          break;
-        case 'analyze_batch_errors':
-          result = await apiClient.analyzeBatchErrors(requestData?.batch_id) as T;
-          break;
         case 'resume_failed_batch':
-          result = await apiClient.resumeBatch(requestData?.batch_id) as T;
+          result = await apiClient.resumeFailedBatch(requestData?.batch_id) as T;
+          break;
+        case 'get_mapping_results':
+          result = await apiClient.getMappingResults(requestData?.batch_id, requestData?.status) as T;
+          break;
+        case 'approve_mappings':
+          result = await apiClient.approveMappings(requestData) as T;
           break;
         default:
           // Fallback to direct API request for custom operations

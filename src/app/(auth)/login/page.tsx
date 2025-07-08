@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 
 const LoginPage = () => {
-  const router = useRouter();
+  // const router = useRouter(); // TODO: Implement routing logic
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -15,12 +15,16 @@ const LoginPage = () => {
     setLoading(true);
     setError(null);
     
-    // In a real implementation, this would integrate with Azure AD
-    // For demo purposes, simulate a successful login after a delay
-    setTimeout(() => {
+    // Real Azure AD implementation required
+    try {
+      // TODO: Implement real Azure AD login flow
+      setError("Azure AD integration not implemented - mock login removed");
       setLoading(false);
-      router.push("/selection");
-    }, 1500);
+    } catch (error) {
+      console.error('Login failed:', error);
+      setError("Authentication failed");
+      setLoading(false);
+    }
   };
 
   return (
@@ -90,7 +94,7 @@ const LoginPage = () => {
         </Form>
 
         <div className="text-center text-gray-500 text-xs mt-4">
-          <p>This is a demo application. In a production environment, this would integrate with Azure AD.</p>
+          <p>Azure AD integration required for production use.</p>
         </div>
       </Card>
     </div>

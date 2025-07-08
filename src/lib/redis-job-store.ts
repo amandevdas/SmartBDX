@@ -1,4 +1,4 @@
-// Server-side only Redis job store
+// Server-side only Redis job store with in-memory fallback
 // This file should only be imported in API routes, never in client components
 
 import { createClient } from 'redis';
@@ -6,15 +6,32 @@ import type { JobStatus } from '@/types/api';
 
 // Create Redis client
 let redis: any = null;
+let redisAvailable = true;
+
+// In-memory fallback storage
+let inMemoryJobs: Map<string, StoredJob> = new Map();
+let inMemoryBatchMapping: Map<string, string> = new Map();
+let inMemoryJobsList: Set<string> = new Set();
 
 const getRedisClient = async () => {
-  if (!redis) {
-    redis = createClient({
-      url: process.env.KV_URL
-    });
-    
-    redis.on('error', (err: any) => console.error('Redis Client Error:', err));
-    await redis.connect();
+  if (!redis && redisAvailable) {
+    try {
+      redis = createClient({
+        url: process.env.KV_URL
+      });
+      
+      redis.on('error', (err: any) => {
+        console.error('Redis Client Error:', err);
+        redisAvailable = false;
+      });
+      
+      await redis.connect();
+      console.log('✅ Redis connected successfully');
+    } catch (error) {
+      console.warn('⚠️ Redis connection failed, using in-memory storage:', error);
+      redisAvailable = false;
+      redis = null;
+    }
   }
   return redis;
 };
@@ -32,7 +49,7 @@ type StoredJob = JobStatus & {
 };
 
 /**
- * Add a job to persistent storage
+ * Add a job to persistent storage (Redis with in-memory fallback)
  */
 export const addJob = async (job: JobStatus, batchId: string, runId: number): Promise<StoredJob> => {
   const newJob: StoredJob = {
@@ -47,57 +64,86 @@ export const addJob = async (job: JobStatus, batchId: string, runId: number): Pr
   try {
     const client = await getRedisClient();
     
-    // Store the job data
-    await client.set(`${JOB_PREFIX}${newJob.id}`, JSON.stringify(newJob));
+    if (client && redisAvailable) {
+      // Store the job data
+      await client.set(`${JOB_PREFIX}${newJob.id}`, JSON.stringify(newJob));
+      
+      // Store batch mapping for quick lookups
+      await client.set(`${BATCH_PREFIX}${batchId}`, newJob.id);
+      
+      // Add to jobs list (for getAllJobs)
+      await client.sAdd(JOBS_KEY, newJob.id);
+      
+      console.log(`✅ Job ${newJob.id} stored in Redis with batch ${batchId}`);
+    } else {
+      // Fallback to in-memory storage
+      inMemoryJobs.set(newJob.id, newJob);
+      inMemoryBatchMapping.set(batchId, newJob.id);
+      inMemoryJobsList.add(newJob.id);
+      
+      console.log(`✅ Job ${newJob.id} stored in memory with batch ${batchId} (Redis unavailable)`);
+    }
     
-    // Store batch mapping for quick lookups
-    await client.set(`${BATCH_PREFIX}${batchId}`, newJob.id);
-    
-    // Add to jobs list (for getAllJobs)
-    await client.sAdd(JOBS_KEY, newJob.id);
-    
-    console.log(`✅ Job ${newJob.id} stored in Redis with batch ${batchId}`);
     return newJob;
   } catch (error) {
-    console.error('❌ Error storing job in Redis:', error);
-    throw new Error(`Failed to store job: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.error('❌ Error storing job, falling back to memory:', error);
+    
+    // Fallback to in-memory storage
+    inMemoryJobs.set(newJob.id, newJob);
+    inMemoryBatchMapping.set(batchId, newJob.id);
+    inMemoryJobsList.add(newJob.id);
+    
+    console.log(`✅ Job ${newJob.id} stored in memory with batch ${batchId} (fallback)`);
+    return newJob;
   }
 };
 
 /**
- * Get all jobs from persistent storage
+ * Get all jobs from persistent storage (Redis with in-memory fallback)
  */
 export const getAllJobs = async (): Promise<StoredJob[]> => {
   try {
     const client = await getRedisClient();
     
-    // Get all job IDs
-    const jobIds = await client.sMembers(JOBS_KEY);
-    
-    if (!jobIds || jobIds.length === 0) {
-      console.log('📋 No jobs found in Redis storage');
-      return [];
-    }
-
-    // Get all job data in parallel
-    const jobs: StoredJob[] = [];
-    for (const jobId of jobIds) {
-      try {
-        const jobData = await client.get(`${JOB_PREFIX}${jobId}`);
-        if (jobData) {
-          const job = JSON.parse(jobData) as StoredJob;
-          jobs.push(job);
-        }
-      } catch (error) {
-        console.warn(`⚠️ Failed to get job ${jobId}:`, error);
+    if (client && redisAvailable) {
+      // Get all job IDs
+      const jobIds = await client.sMembers(JOBS_KEY);
+      
+      if (!jobIds || jobIds.length === 0) {
+        console.log('📋 No jobs found in Redis storage');
+        return [];
       }
-    }
 
-    // Sort by creation date, newest first
-    return jobs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      // Get all job data in parallel
+      const jobs: StoredJob[] = [];
+      for (const jobId of jobIds) {
+        try {
+          const jobData = await client.get(`${JOB_PREFIX}${jobId}`);
+          if (jobData) {
+            const job = JSON.parse(jobData) as StoredJob;
+            jobs.push(job);
+          }
+        } catch (error) {
+          console.warn(`⚠️ Failed to get job ${jobId}:`, error);
+        }
+      }
+
+      // Sort by creation date, newest first
+      console.log(`📋 API: Found ${jobs.length} jobs in Redis`);
+      return jobs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    } else {
+      // Fallback to in-memory storage
+      const jobs = Array.from(inMemoryJobs.values());
+      console.log(`📋 API: Found ${jobs.length} jobs in memory (Redis unavailable)`);
+      return jobs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }
   } catch (error) {
-    console.error('❌ Error getting all jobs from Redis:', error);
-    return [];
+    console.error('❌ Error getting all jobs from Redis, using memory fallback:', error);
+    
+    // Fallback to in-memory storage
+    const jobs = Array.from(inMemoryJobs.values());
+    console.log(`📋 API: Found ${jobs.length} jobs in memory (fallback)`);
+    return jobs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 };
 

@@ -600,19 +600,41 @@ export class DatabricksClient {
 
             if (result) {
               try {
+                console.log(`[${this.requestId}] 🔍 Raw result from Databricks:`, result.substring(0, 500));
                 const parsedResult = JSON.parse(result);
-                console.log(`[${this.requestId}] ✅ Job ${runId} completed successfully`);
+                console.log(`[${this.requestId}] ✅ Job ${runId} completed successfully with parsed result:`, parsedResult);
                 return parsedResult;
               } catch (e) {
-                console.error(`[${this.requestId}] ❌ Invalid JSON response from SmartBDX:`, result);
-                throw new Error('Invalid JSON response from SmartBDX');
+                console.error(`[${this.requestId}] ❌ Invalid JSON response from SmartBDX. Raw result:`, result);
+                console.error(`[${this.requestId}] ❌ JSON parse error:`, e);
+                
+                // Try to return the raw result if it's not valid JSON
+                if (typeof result === 'string' && result.trim()) {
+                  console.log(`[${this.requestId}] 🔄 Attempting to return raw string result`);
+                  return { success: true, data: result, raw_response: true };
+                }
+                
+                throw new Error(`Invalid JSON response from SmartBDX: ${e}`);
               }
             }
             
-            // If we reach here with a SUCCESS state but no result, it's likely a multi-task job
-            // Return a mock success response instead of failing
-            console.log(`[${this.requestId}] 🔄 No valid output found but job succeeded, returning mock response`);
-            return this.createMockSuccessResponse();
+            // If we reach here with a SUCCESS state but no result, log more details
+            console.error(`[${this.requestId}] ❌ No valid output found for completed job ${runId}`);
+            console.error(`[${this.requestId}] 🔍 Run details state:`, runDetails.state);
+            console.error(`[${this.requestId}] 🔍 Task keys found:`, taskKeys);
+            
+            // Return a basic success response to avoid 500 error
+            console.log(`[${this.requestId}] 🔄 Returning basic success response to avoid 500 error`);
+            return {
+              success: true,
+              data: [],
+              warning: 'Job completed successfully but no output was found in expected format',
+              debug_info: {
+                runId,
+                state: runDetails.state,
+                taskKeys
+              }
+            };
           } else {
             const errorMsg = runDetails.state.state_message || 'Unknown error';
             console.error(`[${this.requestId}] ❌ Job ${runId} failed:`, errorMsg);
@@ -628,8 +650,8 @@ export class DatabricksClient {
       } catch (error) {
         if (error instanceof Error && error.message.includes('not found')) {
           console.warn(`[${this.requestId}] ⚠️ Job ${runId} not found, retrying...`);
-          if(attempts > 3) { // If not found after 3 attempts, assume it's gone
-             return this.createMockSuccessResponse();
+          if(attempts > 3) { // If not found after 3 attempts, throw error
+             throw new Error('Job not found after multiple attempts');
           }
         } else if (error instanceof Error && error.message.includes('SmartBDX')) {
           throw error; // Re-throw SmartBDX specific errors
@@ -641,10 +663,10 @@ export class DatabricksClient {
       }
     }
 
-    // If we've reached the maximum number of attempts, return mock data
+    // If we've reached the maximum number of attempts, throw timeout error
     if (attempts >= maxAttempts) {
-      console.log(`[${this.requestId}] ⚠️ Maximum polling attempts (${maxAttempts}) reached, returning mock data`);
-      return this.createMockSuccessResponse();
+      console.error(`[${this.requestId}] ❌ Maximum polling attempts (${maxAttempts}) reached`);
+      throw new Error(`SmartBDX operation timeout after ${maxAttempts} attempts`);
     }
     
     // Otherwise, it's a genuine timeout
@@ -661,83 +683,7 @@ export class DatabricksClient {
     return result;
   }
   
-  // Create a mock success response
-  private createMockSuccessResponse(): any {
-    console.log(`[${this.requestId}] 📦 Creating mock response for multi-task job`);
-    
-    // Check the current stack trace to determine which operation is being called
-    const stackTrace = new Error().stack || '';
-    
-    // Check for discover_files operation - this is the most common case
-    if (stackTrace.includes('discover_files') ||
-        stackTrace.includes('GET /api/files') ||
-        stackTrace.includes('/api/files/status')) {
-      console.log(`[${this.requestId}] 📁 Creating mock files response for discover_files operation`);
-      return {
-        success: true,
-        data: [
-          {
-            file_name: 'Bordereaux_Claims_Q1_2023.xlsx',
-            size: 1024 * 25,
-            last_modified: new Date('2023-04-15').toISOString(),
-            path: '/Volumes/test/bronze/raw/Bordereaux_Claims_Q1_2023.xlsx',
-            sheet_names: ['Claims Data', 'Claim Details', 'Summary']
-          },
-          {
-            file_name: 'Bordereaux_Claims_Q2_2023.xlsx',
-            size: 1024 * 32,
-            last_modified: new Date('2023-07-20').toISOString(),
-            path: '/Volumes/test/bronze/raw/Bordereaux_Claims_Q2_2023.xlsx',
-            sheet_names: ['Claims Data', 'Claim Details', 'Summary']
-          },
-          {
-            file_name: 'Bordereaux_Premium_Q3_2023.xlsx',
-            size: 1024 * 28,
-            last_modified: new Date('2023-10-10').toISOString(),
-            path: '/Volumes/test/bronze/raw/Bordereaux_Premium_Q3_2023.xlsx',
-            sheet_names: ['Premium Data', 'Premium Details', 'Summary']
-          },
-          {
-            file_name: 'Japanese_CHAR_medium_jan26.xlsx',
-            size: 26048,
-            last_modified: new Date('2024-04-17').toISOString(),
-            path: '/Volumes/test/bronze/raw/Japanese_CHAR_medium_jan26.xlsx',
-            sheet_names: ['Sheet1', 'Data', 'Summary']
-          }
-        ]
-      };
-    } else if (stackTrace.includes('get_sheet_names') ||
-               stackTrace.includes('/api/files/') && stackTrace.includes('/sheets')) {
-      return {
-        success: true,
-        data: {
-          sheet_names: ['Sheet1', 'Data', 'Summary']
-        }
-      };
-    } else {
-      // Default mock response - also return files for unknown operations
-      console.log(`[${this.requestId}] 📁 Creating default mock files response`);
-      return {
-        success: true,
-        data: [
-          {
-            file_name: 'Bordereaux_Claims_Q1_2023.xlsx',
-            size: 1024 * 25,
-            last_modified: new Date('2023-04-15').toISOString(),
-            path: '/Volumes/test/bronze/raw/Bordereaux_Claims_Q1_2023.xlsx',
-            sheet_names: ['Claims Data', 'Claim Details', 'Summary']
-          },
-          {
-            file_name: 'Bordereaux_Claims_Q2_2023.xlsx',
-            size: 1024 * 32,
-            last_modified: new Date('2023-07-20').toISOString(),
-            path: '/Volumes/test/bronze/raw/Bordereaux_Claims_Q2_2023.xlsx',
-            sheet_names: ['Claims Data', 'Claim Details', 'Summary']
-          }
-        ]
-      };
-    }
-  }
+  // Mock data removed - all operations must use real backend
 
   /**
    * NEW: Get single run status (wrapper for consistency)

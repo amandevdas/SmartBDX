@@ -45,104 +45,48 @@ const ProcessingStream: React.FC<ProcessingStreamProps> = ({
   const [isPaused, setIsPaused] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Generate mock events from job data (in real implementation, this would come from WebSocket/SSE)
+  // Fetch real processing events from backend API or WebSocket/SSE
   useEffect(() => {
-    const generateEventsFromJobs = () => {
-      const newEvents: ProcessingEvent[] = [];
-      
-      jobs.forEach(job => {
-        if (!job.batchId) return;
+    if (isPaused) return;
+
+    const fetchProcessingEvents = async () => {
+      try {
+        // Get batch IDs from current jobs to fetch events for
+        const batchIds = jobs.map(job => job.batchId).filter(Boolean);
         
-        // Batch started event
-        newEvents.push({
-          id: `${job.batchId}-started`,
-          timestamp: job.timestamp,
-          type: 'batch_started',
-          batchId: job.batchId,
-          message: `Batch processing started`,
-          details: {
-            progress: 0
-          }
+        if (batchIds.length === 0) {
+          setEvents([]);
+          return;
+        }
+
+        // Fetch real events from backend
+        const response = await fetch('/api/processing/events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ batchIds, maxEvents })
         });
 
-        // File processing events (mock data)
-        if (job.files && job.files.length > 0) {
-          job.files.forEach((file, index) => {
-            const fileStartTime = new Date(new Date(job.timestamp).getTime() + index * 30000).toISOString();
-            
-            newEvents.push({
-              id: `${job.batchId}-${file.id}-started`,
-              timestamp: fileStartTime,
-              type: 'file_started',
-              batchId: job.batchId!,
-              fileId: file.id,
-              fileName: file.name,
-              message: `Started processing ${file.name}`,
-              details: {
-                sheets: file.sheets,
-                cache_hit: Math.random() > 0.5
-              }
-            });
-
-            // Mock completion if job is completed
-            if (job.status === 'completed') {
-              const fileEndTime = new Date(new Date(fileStartTime).getTime() + Math.random() * 60000).toISOString();
-              newEvents.push({
-                id: `${job.batchId}-${file.id}-completed`,
-                timestamp: fileEndTime,
-                type: 'file_completed',
-                batchId: job.batchId!,
-                fileId: file.id,
-                fileName: file.name,
-                message: `Completed processing ${file.name}`,
-                details: {
-                  duration: Math.floor(Math.random() * 60),
-                  cost: Math.random() * 0.05,
-                  cache_hit: Math.random() > 0.5
-                }
-              });
-            }
-          });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data) {
+            setEvents(data.data);
+          }
+        } else {
+          console.error('Failed to fetch processing events');
+          setEvents([]);
         }
-
-        // Batch completion event
-        if (job.status === 'completed' && 'endTime' in job && job.endTime) {
-          newEvents.push({
-            id: `${job.batchId}-completed`,
-            timestamp: job.endTime,
-            type: 'batch_completed',
-            batchId: job.batchId,
-            message: `Batch processing completed successfully`,
-            details: {
-              duration: Math.floor((new Date(job.endTime).getTime() - new Date(job.timestamp).getTime()) / 1000)
-            }
-          });
-        }
-
-        // Batch error event
-        if (job.status === 'error' && 'endTime' in job && job.endTime) {
-          newEvents.push({
-            id: `${job.batchId}-failed`,
-            timestamp: job.endTime,
-            type: 'batch_failed',
-            batchId: job.batchId,
-            message: `Batch processing failed`,
-            details: {
-              error: 'error' in job ? job.error : 'Unknown error'
-            }
-          });
-        }
-      });
-
-      // Sort by timestamp descending and limit
-      newEvents.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      return newEvents.slice(0, maxEvents);
+      } catch (error) {
+        console.error('Error fetching processing events:', error);
+        setEvents([]);
+      }
     };
 
-    if (!isPaused) {
-      const newEvents = generateEventsFromJobs();
-      setEvents(newEvents);
-    }
+    fetchProcessingEvents();
+    
+    // Set up polling for real-time updates (in production, use WebSocket/SSE)
+    const interval = setInterval(fetchProcessingEvents, 5000);
+    
+    return () => clearInterval(interval);
   }, [jobs, maxEvents, isPaused]);
 
   // Filter events

@@ -49,7 +49,7 @@ export default function ProcessingPage() {
         success: boolean;
         data: { deletedCount: number };
         message: string;
-      }>('/jobs/clear', {
+      }>('/api/jobs', {
         method: 'DELETE',
       });
       
@@ -140,13 +140,7 @@ export default function ProcessingPage() {
       const updates = await Promise.all(
         activeJobs.map(async (job) => {
           try {
-            const response = await apiRequest<{data: any}>('/databricks', {
-              method: 'POST',
-              body: JSON.stringify({
-                operation: 'get_batch_status',
-                parameters: { batch_id: job.batchId }
-              })
-            });
+            const response = await apiRequest<{data: any}>(`/get_batch_status/${job.batchId}`);
             
             const data = response?.data || response;
             return {

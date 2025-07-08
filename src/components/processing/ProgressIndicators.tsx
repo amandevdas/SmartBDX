@@ -93,10 +93,10 @@ const ProgressIndicators: React.FC<ProgressIndicatorsProps> = ({ jobs, className
         return `${seconds}s`;
       };
 
-      // Calculate cost (mock data - in real implementation, this would come from backend)
+      // Calculate cost from job data (if available)
       const totalCost = jobs.reduce((sum, job) => {
-        // Mock cost calculation
-        return sum + (Math.random() * 0.1);
+        // Use actual cost data from job if available, otherwise 0
+        return sum + (('cost' in job && typeof job.cost === 'number') ? job.cost : 0);
       }, 0);
 
       // Calculate processing rate (files/hour)
@@ -119,8 +119,11 @@ const ProgressIndicators: React.FC<ProgressIndicatorsProps> = ({ jobs, className
       const finishedJobs = completedJobs + failedJobs;
       const averageSuccessRate = finishedJobs > 0 ? Math.round((completedJobs / finishedJobs) * 100) : 0;
 
-      // Mock cache hit rate
-      const cacheHitRate = Math.floor(Math.random() * 40) + 60; // 60-100%
+      // Calculate cache hit rate from job data (if available)
+      const jobsWithCacheData = jobs.filter(j => 'cacheHit' in j && typeof (j as any).cacheHit === 'boolean');
+      const cacheHitRate = jobsWithCacheData.length > 0
+        ? Math.round((jobsWithCacheData.filter(j => (j as any).cacheHit).length / jobsWithCacheData.length) * 100)
+        : 0;
 
       return {
         totalJobs,

@@ -35,175 +35,73 @@ const MappingPage = () => {
   const [activeTab, setActiveTab] = useState("pending");
 
   useEffect(() => {
-    setLoading(true);
-    // In a real implementation, fetch data from API
-    // fetch('/api/mapping')
-    //   .then(res => res.json())
-    //   .then(data => {
-    //     setFiles(data);
-    //     setLoading(false);
-    //   })
-    //   .catch(err => {
-    //     setError(err);
-    //     setLoading(false);
-    //   });
+    const loadMappingFiles = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch('/api/mapping?status=all');
+        const result = await response.json();
+        
+        if (result.success && result.data.files_summary) {
+          // Transform backend data to UI format
+          const transformedFiles: MappingFile[] = result.data.files_summary.map((file: any) => ({
+            id: `${file.file_name}_${file.sheet_name}`,
+            file_name: `${file.file_name}/${file.sheet_name}`,
+            status: file.status,
+            confidence: file.high_confidence / file.total_columns,
+            column_count: file.total_columns,
+            mapped_columns: file.total_columns - file.needs_review,
+            last_modified: new Date().toISOString().split('T')[0]
+          }));
+          setFiles(transformedFiles);
+        } else {
+          setFiles([]);
+        }
+      } catch (err) {
+        console.error('Error loading mapping files:', err);
+        setError(err as Error);
+        setFiles([]);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-    // For demo purposes, simulate API call with mock data
-    setTimeout(() => {
-      const mockFiles: MappingFile[] = [
-        {
-          id: "file-001",
-          file_name: "Q1_2023_Claims.xlsx",
-          status: "pending",
-          confidence: 0.85,
-          column_count: 12,
-          mapped_columns: 10,
-          last_modified: "2023-04-15",
-        },
-        {
-          id: "file-002",
-          file_name: "Q2_2023_Claims.xlsx",
-          status: "pending",
-          confidence: 0.92,
-          column_count: 12,
-          mapped_columns: 12,
-          last_modified: "2023-07-20",
-        },
-        {
-          id: "file-003",
-          file_name: "Q3_2023_Claims.xlsx",
-          status: "approved",
-          confidence: 0.78,
-          column_count: 12,
-          mapped_columns: 11,
-          last_modified: "2023-10-10",
-        },
-        {
-          id: "file-004",
-          file_name: "Q4_2023_Claims.xlsx",
-          status: "rejected",
-          confidence: 0.65,
-          column_count: 12,
-          mapped_columns: 8,
-          last_modified: "2024-01-05",
-        },
-        {
-          id: "file-005",
-          file_name: "Annual_Summary_2023.xlsx",
-          status: "pending",
-          confidence: 0.73,
-          column_count: 15,
-          mapped_columns: 12,
-          last_modified: "2024-01-15",
-        },
-      ];
-      
-      setFiles(mockFiles);
-      setLoading(false);
-    }, 1000);
+    loadMappingFiles();
   }, []);
 
-  const handleViewMapping = (file: MappingFile) => {
+  const handleViewMapping = async (file: MappingFile) => {
     setSelectedFile(file);
     setMappingLoading(true);
     setMappingModalVisible(true);
     setSelectedMappings([]);
     
-    // In a real implementation, fetch mapping data from API
-    // fetch(`/api/mapping/${file.id}`)
-    //   .then(res => res.json())
-    //   .then(data => {
-    //     setMappings(data.mappings);
-    //     setMappingLoading(false);
-    //   })
-    //   .catch(err => {
-    //     setError(err);
-    //     setMappingLoading(false);
-    //   });
-
-    // For demo purposes, simulate API call with mock data
-    setTimeout(() => {
-      const mockMappings: ColumnMapping[] = [
-        {
-          source_column: "Policy Number",
-          target_column: "policy_id",
-          confidence: 0.98,
-          examples: ["POL-123456", "POL-789012"],
-        },
-        {
-          source_column: "Insured Name",
-          target_column: "insured_name",
-          confidence: 0.95,
-          examples: ["Acme Corp", "XYZ Ltd"],
-        },
-        {
-          source_column: "Premium Amount",
-          target_column: "premium",
-          confidence: 0.92,
-          examples: ["$1,200.00", "$950.50"],
-        },
-        {
-          source_column: "Policy Start Date",
-          target_column: "inception_date",
-          confidence: 0.88,
-          examples: ["01/01/2023", "15/02/2023"],
-        },
-        {
-          source_column: "Policy End Date",
-          target_column: "expiry_date",
-          confidence: 0.87,
-          examples: ["31/12/2023", "14/02/2024"],
-        },
-        {
-          source_column: "Risk Location",
-          target_column: "risk_address",
-          confidence: 0.75,
-          examples: ["123 Main St, New York", "456 Park Ave, Chicago"],
-        },
-        {
-          source_column: "Coverage Type",
-          target_column: "coverage_type",
-          confidence: 0.82,
-          examples: ["Property", "Liability"],
-        },
-        {
-          source_column: "Limit of Liability",
-          target_column: "limit",
-          confidence: 0.79,
-          examples: ["$1,000,000", "$500,000"],
-        },
-        {
-          source_column: "Deductible",
-          target_column: "deductible",
-          confidence: 0.85,
-          examples: ["$5,000", "$10,000"],
-        },
-        {
-          source_column: "Broker Name",
-          target_column: "broker",
-          confidence: 0.68,
-          examples: ["ABC Insurance", "XYZ Brokers"],
-        },
-        {
-          source_column: "Policy Status",
-          target_column: "status",
-          confidence: 0.91,
-          examples: ["Active", "Renewed"],
-        },
-        {
-          source_column: "Commission Rate",
-          target_column: "commission_pct",
-          confidence: 0.72,
-          examples: ["15%", "12.5%"],
-        },
-      ];
+    try {
+      // Extract file_name and sheet_name from the combined id
+      const [fileName, sheetName] = file.file_name.split('/');
+      const response = await fetch(`/api/mapping?file_name=${fileName}&sheet_name=${sheetName}&status=pending`);
+      const result = await response.json();
       
-      setMappings(mockMappings);
+      if (result.success && result.data.mappings) {
+        // Transform backend mappings to UI format
+        const transformedMappings: ColumnMapping[] = result.data.mappings.map((mapping: any) => ({
+          source_column: mapping.source_column,
+          target_column: mapping.target_column,
+          confidence: mapping.confidence,
+          examples: mapping.sample_values || []
+        }));
+        setMappings(transformedMappings);
+      } else {
+        setMappings([]);
+      }
+    } catch (err) {
+      console.error('Error loading mapping details:', err);
+      setError(err as Error);
+      setMappings([]);
+    } finally {
       setMappingLoading(false);
-    }, 1000);
+    }
   };
 
-  const handleApproveMapping = () => {
+  const handleApproveMapping = async () => {
     // In a real implementation, call API to approve mapping
     // fetch(`/api/mapping/${selectedFile?.id}/approve`, {
     //   method: 'POST',
@@ -220,33 +118,79 @@ const MappingPage = () => {
     //     setError(err);
     //   });
 
-    // For demo purposes, update state directly
-    setFiles(prev => prev.map(file => 
-      file.id === selectedFile?.id ? { ...file, status: 'approved' } : file
-    ));
-    setMappingModalVisible(false);
+    if (!selectedFile) return;
+    
+    try {
+      const [fileName, sheetName] = selectedFile.file_name.split('/');
+      
+      // Prepare approval data
+      const approvalData = {
+        file_name: fileName,
+        sheet_name: sheetName,
+        approved_mappings: selectedMappings.length > 0
+          ? mappings.filter(m => selectedMappings.includes(m.source_column))
+          : mappings, // Approve all if none specifically selected
+        rejected_mappings: [],
+        reviewed_by: 'frontend_user'
+      };
+      
+      const response = await fetch('/api/mapping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(approvalData)
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        // Update local state
+        setFiles(prev => prev.map(file =>
+          file.id === selectedFile?.id ? { ...file, status: 'approved' } : file
+        ));
+        setMappingModalVisible(false);
+      } else {
+        setError(new Error(result.error || 'Failed to approve mapping'));
+      }
+    } catch (err) {
+      console.error('Error approving mapping:', err);
+      setError(err as Error);
+    }
   };
 
-  const handleRejectMapping = () => {
-    // In a real implementation, call API to reject mapping
-    // fetch(`/api/mapping/${selectedFile?.id}/reject`, {
-    //   method: 'POST',
-    // })
-    //   .then(() => {
-    //     setFiles(prev => prev.map(file => 
-    //       file.id === selectedFile?.id ? { ...file, status: 'rejected' } : file
-    //     ));
-    //     setMappingModalVisible(false);
-    //   })
-    //   .catch(err => {
-    //     setError(err);
-    //   });
-
-    // For demo purposes, update state directly
-    setFiles(prev => prev.map(file => 
-      file.id === selectedFile?.id ? { ...file, status: 'rejected' } : file
-    ));
-    setMappingModalVisible(false);
+  const handleRejectMapping = async () => {
+    if (!selectedFile) return;
+    
+    try {
+      const [fileName, sheetName] = selectedFile.file_name.split('/');
+      
+      const rejectionData = {
+        file_name: fileName,
+        sheet_name: sheetName,
+        approved_mappings: [],
+        rejected_mappings: mappings.map(m => m.source_column),
+        reviewed_by: 'frontend_user'
+      };
+      
+      const response = await fetch('/api/mapping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rejectionData)
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        setFiles(prev => prev.map(file =>
+          file.id === selectedFile?.id ? { ...file, status: 'rejected' } : file
+        ));
+        setMappingModalVisible(false);
+      } else {
+        setError(new Error(result.error || 'Failed to reject mapping'));
+      }
+    } catch (err) {
+      console.error('Error rejecting mapping:', err);
+      setError(err as Error);
+    }
   };
 
   const handleSelectMapping = (sourceColumn: string) => {

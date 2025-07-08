@@ -10,18 +10,15 @@ import {
   CheckCircleOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  BarChartOutlined,
   ToolOutlined
 } from "@ant-design/icons";
 
 const navItems = [
-  { path: "/dashboard", label: "Dashboard", icon: <DashboardOutlined /> },
-  { path: "/selection", label: "Smart Selection", icon: <FileOutlined /> },
+  { path: "/selection", label: "File Selection", icon: <FileOutlined /> },
   { path: "/processing", label: "Processing", icon: <SettingOutlined /> },
   { path: "/monitoring", label: "Monitoring", icon: <DashboardOutlined /> },
-  { path: "/recovery", label: "Recovery Center", icon: <ToolOutlined /> },
-  { path: "/analytics", label: "Analytics", icon: <BarChartOutlined /> },
   { path: "/mapping", label: "Mapping Review", icon: <CheckCircleOutlined /> },
+  { path: "/recovery", label: "Recovery Center", icon: <ToolOutlined /> },
 ];
 
 export const Sidebar = () => {

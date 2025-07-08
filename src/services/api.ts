@@ -1,157 +1,116 @@
-// src/services/api.ts
+// src/services/api.ts - Minimal API client supporting only backend operations
 import { apiRequest } from '../utils/apiHelpers';
 import {
   FileItem,
   JobStatus,
-  ProcessRequest,
-  BatchAnalytics,
-  ColumnMapping,
-  SmartFileSelection,
-  RateLimitInfo,
-  CheckpointInfo,
-  CostInfo
+  ProcessRequest
 } from '../types/api';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 /**
- * SmartBDX API client with full backend integration
- * Replaces mock data with real Databricks backend endpoints
+ * SmartBDX API client - Only backend-supported operations
+ * Backend supports exactly 6 operations from SmartBDX_API_Gateway_v3.py
  */
 export const apiClient = {
-  // === FILE DISCOVERY & METADATA ===
+  // === OPERATION 1: DISCOVER FILES WITH SHEETS ===
   
   /**
-   * Discover files with rich metadata from backend
-   * Maps to: smartbdx_selection.discover_files_and_sheets_metadata()
+   * Discover files with sheets metadata
+   * Maps to: discover_files_with_sheets backend operation
    */
   async discoverFilesWithSheets(): Promise<FileItem[]> {
-    console.log('🔍 API Client: Discovering files with AI insights from Databricks...');
-    const response = await apiRequest<{data: FileItem[]}>('/discover_files_with_sheets', {
-      method: 'POST',
-      body: JSON.stringify({
-        parameters: {
-          volume_folder: '/Volumes/test/bronze/raw/',
-          include_metadata: true,
-          calculate_priority: true,
-          check_cache_status: true
-        }
-      })
-    });
+    console.log('🔍 API Client: Discovering files with sheets from backend...');
     
-    // Handle both direct array and wrapped response formats
-    if (Array.isArray(response)) {
-      return response;
-    } else if (response && response.data && Array.isArray(response.data)) {
-      return response.data;
-    } else {
-      console.warn('Invalid response format from discover_files_with_sheets:', response);
+    try {
+      const response = await apiRequest<any>('/discover_files_with_sheets', {
+        method: 'POST',
+        body: JSON.stringify({
+          parameters: {
+            volume_folder: '/Volumes/test/bronze/raw/'
+          }
+        })
+      });
+      
+      console.log('🔍 API Client: Raw response:', response);
+      
+      // Handle different response formats more robustly
+      let filesData: any[] = [];
+      
+      // Case 1: Response is directly an array
+      if (Array.isArray(response)) {
+        console.log('📦 API Client: Response is direct array');
+        filesData = response;
+      }
+      // Case 2: Response has data property with array
+      else if (response?.data && Array.isArray(response.data)) {
+        console.log('📦 API Client: Response has data array');
+        filesData = response.data;
+      }
+      // Case 3: Response has success flag and data
+      else if (response?.success && response?.data) {
+        console.log('📦 API Client: Response has success flag');
+        filesData = Array.isArray(response.data) ? response.data : [response.data];
+      }
+      // Case 4: Response looks like a single file object
+      else if (response?.file_name || response?.name) {
+        console.log('📦 API Client: Response is single file object');
+        filesData = [response];
+      }
+      // Case 5: Warning response with empty data
+      else if (response?.warning) {
+        console.log('⚠️ API Client: Got warning response:', response.warning);
+        filesData = response.data || [];
+      }
+      // Case 6: Raw response that might be files
+      else if (response && typeof response === 'object') {
+        console.log('📦 API Client: Attempting to parse object response');
+        // Try to extract files from various possible structures
+        const possibleFiles = response.files || response.discovered_files || response.results || [];
+        filesData = Array.isArray(possibleFiles) ? possibleFiles : [];
+      }
+      
+      console.log(`🔍 API Client: Extracted ${filesData.length} files from response`);
+      
+      // Transform and validate the files data
+      const validFiles = filesData
+        .filter(file => file && (file.file_name || file.name))
+        .map(file => ({
+          id: file.id || file.file_name || file.name,
+          name: file.file_name || file.name,
+          size: file.size || 0,
+          lastModified: file.last_modified || file.lastModified || new Date().toISOString(),
+          status: file.status || 'ready',
+          sheets: file.sheet_names || file.sheets || [],
+          path: file.path || '',
+          type: file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        }));
+      
+      console.log(`✅ API Client: Returning ${validFiles.length} valid files`);
+      return validFiles;
+      
+    } catch (error) {
+      console.error('❌ API Client: Error in discoverFilesWithSheets:', error);
+      
+      // Check if error has response data we can use
+      if (error instanceof Error && 'response' in error) {
+        console.log('🔍 API Client: Checking error response for data');
+      }
+      
+      // Return empty array instead of throwing to prevent UI crashes
+      console.log('🔄 API Client: Returning empty array due to error');
       return [];
     }
   },
 
-  /**
-   * Check processing status and get cache recommendations
-   * Maps to: smartbdx_infrastructure.BatchCheckpointManager
-   */
-  async checkProcessingStatus(fileIds: string[]): Promise<any> {
-    console.log('📊 API Client: Checking processing status via Databricks...');
-    return apiRequest(`/check_processing_status?fileIds=${fileIds.join(',')}`);
-  },
-
-  // === LEGACY FILE OPERATIONS (Updated) ===
-  
-  async getFiles(): Promise<FileItem[]> {
-    // Use the new discovery endpoint but maintain backward compatibility
-    return this.discoverFilesWithSheets();
-  },
-
-  async getFilePreview(fileId: string): Promise<any> {
-    return apiRequest(`/files/${fileId}/preview`);
-  },
-
-  async getFileSheets(fileId: string): Promise<string[]> {
-    return apiRequest<string[]>(`/files/${fileId}/sheets`);
-  },
-
-  // === SMART SELECTION & AI RECOMMENDATIONS ===
+  // === OPERATION 2: PROCESS FILES ===
   
   /**
-   * Get AI-powered file selection recommendations
-   * Maps to: smartbdx_selective_processing()
-   */
-  async getSmartFileSelection(options: {
-    file_patterns?: string[];
-    sheet_patterns?: string[];
-    max_items?: number;
-    priority_mode?: 'failed_first' | 'newest_first' | 'largest_first';
-  }): Promise<SmartFileSelection> {
-    console.log('🧠 API Client: Getting smart file selection via Databricks...');
-    const response = await apiRequest<{data: SmartFileSelection}>('/smart_file_selection', {
-      method: 'POST',
-      body: JSON.stringify({
-        parameters: {
-          ...options,
-          volume_folder: '/Volumes/test/bronze/raw/',
-          criteria: options.priority_mode || 'failed_first'
-        }
-      })
-    });
-    
-    // Handle wrapped response format
-    if (response && typeof response === 'object' && 'data' in response) {
-      return (response as {data: SmartFileSelection}).data;
-    }
-    return response as SmartFileSelection;
-  },
-
-  /**
-   * Get quick file analysis for processing preview
-   * Maps to: smartbdx_selection.quick_file_analysis()
-   */
-  async quickFileAnalysis(fileIds: string[]): Promise<any> {
-    console.log('📊 API Client: Getting quick file analysis via Databricks...');
-    return apiRequest('/databricks', {
-      method: 'POST',
-      body: JSON.stringify({
-        operation: 'quick_file_analysis',
-        parameters: {
-          file_ids: fileIds,
-          include_cost_estimate: true,
-          include_time_estimate: true,
-          include_cache_analysis: true
-        }
-      })
-    });
-  },
-
-  /**
-   * Get batch processing strategy recommendations
-   * Maps to: smartbdx_processing.azure_optimized_batch_orchestration()
-   */
-  async suggestBatchStrategy(fileIds: string[]): Promise<any> {
-    console.log('🎯 API Client: Getting batch strategy suggestions via Databricks...');
-    return apiRequest('/databricks', {
-      method: 'POST',
-      body: JSON.stringify({
-        operation: 'suggest_batch_strategy',
-        parameters: {
-          file_ids: fileIds,
-          optimize_for: 'cost_and_speed',
-          include_risk_assessment: true
-        }
-      })
-    });
-  },
-
-  // === PROCESSING OPERATIONS ===
-  
-  /**
-   * Submit processing job with SmartBDX backend
-   * Maps to: smartbdx_processing.quick_start_production_batch()
+   * Submit processing job with mapping support
+   * Maps to: process_files backend operation
    */
   async submitProcessingJob(request: ProcessRequest): Promise<{ jobId: string; status: string }> {
-    console.log('🚀 API Client: Submitting processing job via Databricks...');
+    console.log('🚀 API Client: Submitting processing job with mapping...');
     const response = await apiRequest<{data: {batch_id: string; status: string}}>('/process_files', {
       method: 'POST',
       body: JSON.stringify({
@@ -161,41 +120,34 @@ export const apiClient = {
             sheets: request.sheetSelections?.[fileId] || []
           })),
           volume_folder: '/Volumes/test/bronze/raw/',
-          enable_mapping: true,
-          enable_cache: true,
-          batch_options: request.options
+          enable_mapping: request.options?.enable_mapping || false
         }
       })
     });
     
-    // Transform response to match expected format with better error handling
+    // Transform response to match expected format
     if (!response) {
       throw new Error('No response from backend');
     }
     
     const data = response?.data || response;
-    
-    // Ensure we always have a jobId - handle both batch_id and jobId formats
     const jobId = (data as any)?.batch_id || (data as any)?.jobId || `batch-${Date.now()}`;
     const status = (data as any)?.status || 'submitted';
     
-    return {
-      jobId,
-      status
-    };
+    return { jobId, status };
   },
 
+  // === OPERATION 3: GET BATCH STATUS ===
+  
   /**
-   * Get real-time batch status with checkpoint information
-   * Maps to: smartbdx_monitoring.show_batch_progress()
+   * Get batch processing status
+   * Maps to: get_batch_status backend operation
    */
   async getBatchStatus(batchId: string): Promise<JobStatus> {
-    console.log(`📊 API Client: Getting batch status for ${batchId} via Databricks...`);
+    console.log(`📊 API Client: Getting batch status for ${batchId}...`);
     
     try {
       const response = await apiRequest<{data: any}>(`/get_batch_status/${batchId}`);
-      
-      // Transform backend response to JobStatus format with better error handling
       const data = response?.data || response;
       
       if (!data) {
@@ -208,12 +160,7 @@ export const apiClient = {
         message: data.current_file || data.message || 'Processing...',
         batchId: data.batch_id || batchId,
         timestamp: data.start_time || data.timestamp || new Date().toISOString(),
-        endTime: data.end_time,
-        // Enhanced backend data (optional)
-        rate_limit_status: data.rate_limit_status,
-        checkpoint_data: data.checkpoint_data,
-        cost_estimate: data.cost_estimate,
-        cache_utilization: data.cache_utilization
+        endTime: data.end_time
       };
 
       // Add progress only for statuses that support it
@@ -237,294 +184,70 @@ export const apiClient = {
     }
   },
 
-  async getJobStatus(jobId: string): Promise<JobStatus> {
-    return apiRequest<JobStatus>(`/status/${jobId}`);
-  },
-
-  async getAllJobs(): Promise<JobStatus[]> {
-    return apiRequest<JobStatus[]>('/jobs');
-  },
-
+  // === OPERATION 4: RESUME FAILED BATCH ===
+  
   /**
    * Resume failed batch processing
-   * Maps to: smartbdx_processing.resume_failed_batch()
+   * Maps to: resume_failed_batch backend operation
    */
-  async resumeBatch(batchId: string): Promise<any> {
+  async resumeFailedBatch(batchId: string): Promise<any> {
+    console.log(`🔄 API Client: Resuming failed batch ${batchId}...`);
     return apiRequest('/databricks', {
       method: 'POST',
       body: JSON.stringify({
-        operation: 'resume_batch',
+        operation: 'resume_failed_batch',
         parameters: { batch_id: batchId }
       })
     });
   },
 
-  // === MAPPING OPERATIONS ===
+  // === OPERATION 5: GET MAPPING RESULTS ===
   
   /**
-   * Get enhanced mapping suggestions with vector similarity
-   * Maps to: smartbdx_mapping_core.process_table_mapping()
+   * Get mapping results for review
+   * Maps to: get_mapping_results backend operation
    */
-  async getMappingSuggestions(fileId: string): Promise<ColumnMapping[]> {
-    console.log(`🗺️ API Client: Getting mapping suggestions for ${fileId} via Databricks...`);
-    const response = await apiRequest<{data: ColumnMapping[]}>('/databricks', {
-      method: 'POST',
-      body: JSON.stringify({
-        operation: 'get_mapping_suggestions',
-        parameters: {
-          file_id: fileId,
-          volume_folder: '/Volumes/test/bronze/raw/',
-          include_vector_scores: true,
-          include_llm_reasoning: true,
-          include_examples: true
-        }
-      })
-    });
+  async getMappingResults(batchId?: string, status?: string): Promise<any> {
+    console.log(`🗂️ API Client: Getting mapping results...`);
+    const params = new URLSearchParams();
+    if (batchId) params.set('batch_id', batchId);
+    if (status) params.set('status', status);
     
-    // Handle wrapped response format
-    if (response && typeof response === 'object' && 'data' in response) {
-      return (response as {data: ColumnMapping[]}).data;
-    }
-    return response as ColumnMapping[];
+    return apiRequest(`/mapping?${params.toString()}`);
   },
 
-  async approveMappings(fileId: string, mappings: ColumnMapping[]): Promise<void> {
-    return apiRequest(`/mapping/${fileId}/approve`, {
-      method: 'POST',
-      body: JSON.stringify({
-        operation: 'approve_mappings',
-        parameters: {
-          file_id: fileId,
-          mappings: mappings
-        }
-      })
-    });
-  },
-
-  // === ANALYTICS & MONITORING ===
+  // === OPERATION 6: APPROVE MAPPINGS ===
   
   /**
-   * Get cache analytics for cost optimization
-   * Maps to: smartbdx_infrastructure cache utilization tracking
+   * Approve or reject mapping results
+   * Maps to: approve_mappings backend operation
    */
-  async getCacheAnalytics(): Promise<any> {
-    console.log('📊 API Client: Getting cache analytics via Databricks...');
-    const response = await apiRequest<{data: any}>('/get_cache_analytics', {
+  async approveMappings(approvalData: {
+    file_name: string;
+    sheet_name: string;
+    approved_mappings: any[];
+    rejected_mappings: any[];
+    reviewed_by: string;
+  }): Promise<any> {
+    console.log(`✅ API Client: Approving mappings for ${approvalData.file_name}...`);
+    return apiRequest('/mapping', {
       method: 'POST',
-      body: JSON.stringify({
-        operation: 'get_cache_analytics',
-        parameters: {
-          include_trends: true,
-          include_savings: true,
-          include_recommendations: true
-        }
-      })
-    });
-    
-    // Handle wrapped response format
-    return response?.data || response;
-  },
-
-  /**
-   * Get usage analytics and performance metrics
-   * Maps to: smartbdx_monitoring system metrics
-   */
-  async getUsageAnalytics(): Promise<any> {
-    console.log('📊 API Client: Getting usage analytics via Databricks...');
-    const response = await apiRequest<{data: any}>('/get_usage_analytics', {
-      method: 'POST',
-      body: JSON.stringify({
-        operation: 'get_usage_analytics',
-        parameters: {
-          include_performance: true,
-          include_costs: true,
-          include_trends: true
-        }
-      })
-    });
-    
-    // Handle wrapped response format
-    return response?.data || response;
-  },
-
-  /**
-   * Get processing insights and predictive analytics
-   * Maps to: smartbdx_monitoring predictive analytics
-   */
-  async getProcessingInsights(): Promise<any> {
-    console.log('🔮 API Client: Getting processing insights via Databricks...');
-    const response = await apiRequest<{data: any}>('/get_processing_insights', {
-      method: 'POST',
-      body: JSON.stringify({
-        operation: 'get_processing_insights',
-        parameters: {
-          include_predictions: true,
-          include_patterns: true,
-          include_recommendations: true
-        }
-      })
-    });
-    
-    // Handle wrapped response format
-    return response?.data || response;
-  },
-
-  /**
-   * Analyze batch errors with AI insights
-   * Maps to: smartbdx_monitoring.get_failed_items()
-   */
-  async analyzeBatchErrors(batchId: string): Promise<any> {
-    return apiRequest('/databricks', {
-      method: 'POST',
-      body: JSON.stringify({
-        operation: 'analyze_batch_errors',
-        parameters: {
-          batch_id: batchId,
-          include_patterns: true,
-          include_suggestions: true
-        }
-      })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(approvalData)
     });
   },
 
-  // === BATCH HISTORY & MANAGEMENT ===
-  
-  async getBatchHistory(): Promise<any[]> {
-    return apiRequest('/batches');
-  },
-
-  async downloadResults(jobId: string): Promise<Blob> {
-    const response = await fetch(`${API_BASE_URL}/results/${jobId}/download`);
-    if (!response.ok) {
-      throw new Error(`Download failed: ${response.statusText}`);
-    }
-    return response.blob();
-  },
-
-  // === SYSTEM STATUS ===
+  // === LEGACY COMPATIBILITY (MINIMAL) ===
   
   /**
-   * Get system health and capabilities
-   * Maps to: smartbdx_main.validate_system_health()
+   * @deprecated Use discoverFilesWithSheets instead
    */
-  async getSystemStatus(): Promise<any> {
-    return apiRequest('/databricks', {
-      method: 'POST',
-      body: JSON.stringify({
-        operation: 'get_system_status',
-        parameters: {}
-      })
-    });
-  },
-
-  /**
-   * Get current rate limiting status
-   * Maps to: smartbdx_infrastructure.AzureOpenAIRateLimiter
-   */
-  async getRateLimitStatus(): Promise<RateLimitInfo> {
-    return apiRequest<RateLimitInfo>('/rate_limit_status');
+  async getFiles(): Promise<FileItem[]> {
+    return this.discoverFilesWithSheets();
   }
 };
 
-/**
- * Legacy compatibility wrapper - can be removed after migration
- * @deprecated Use apiClient instead
- */
-export const legacyApiClient = {
-  async get<T>(endpoint: string, options = {}): Promise<T> {
-    console.warn('Using legacy API client. Migrate to new apiClient.');
-    return apiRequest<T>(endpoint, { ...options, method: 'GET' });
-  },
-
-  async post<T>(endpoint: string, data: any, options = {}): Promise<T> {
-    console.warn('Using legacy API client. Migrate to new apiClient.');
-    return apiRequest<T>(endpoint, {
-      ...options,
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  // Mock response helper for backward compatibility
-  getMockResponse(endpoint: string, requestData?: any): any {
-    // File listing mock
-    if (endpoint === '/api/files') {
-      return [
-        {
-          id: 'file1',
-          name: 'bordereaux_sample_1.xlsx',
-          status: 'ready',
-          size: 1024000,
-          lastModified: new Date('2024-01-15'),
-        },
-        {
-          id: 'file2', 
-          name: 'reinsurance_data_q4.xlsx',
-          status: 'processing',
-          size: 2048000,
-          lastModified: new Date('2024-01-16'),
-        },
-        {
-          id: 'file3',
-          name: 'claims_report_2024.xlsx', 
-          status: 'completed',
-          size: 3072000,
-          lastModified: new Date('2024-01-17'),
-        },
-        {
-          id: 'file4',
-          name: 'premium_calculations.xlsx',
-          status: 'error',
-          size: 1536000,
-          lastModified: new Date('2024-01-18'),
-        },
-      ];
-    }
-
-    // Job status mock
-    if (endpoint.includes('/api/status/')) {
-      const jobId = endpoint.split('/').pop();
-      return {
-        jobId,
-        status: Math.random() > 0.3 ? 'processing' : 'completed',
-        progress: Math.floor(Math.random() * 100),
-        message: 'Processing headers and mapping columns...',
-      };
-    }
-
-    // Process submission mock
-    if (endpoint === '/api/process') {
-      return {
-        jobId: `job-${Date.now()}`,
-        status: 'submitted',
-        message: 'Job submitted successfully',
-      };
-    }
-
-    // Mapping suggestions mock
-    if (endpoint.includes('/api/mapping/')) {
-      return {
-        suggestions: [
-          { source: 'Policy Number', target: 'policy_id', confidence: 0.95 },
-          { source: 'Premium Amount', target: 'premium_value', confidence: 0.87 },
-          { source: 'Effective Date', target: 'effective_date', confidence: 0.92 },
-        ],
-      };
-    }
-
-    // Default empty response
-    return {};
-  },
-
-  // Auth headers helper (placeholder)
-  async getAuthHeaders(): Promise<Record<string, string>> {
-    // TODO: Implement actual auth token retrieval
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  },
-};
-
-// Export both for compatibility during migration
+// Export for backward compatibility
 export default apiClient;
 
 // Utility functions for common operations

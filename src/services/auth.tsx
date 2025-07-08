@@ -39,16 +39,7 @@ const AuthContext = createContext<AuthContextType>({
   hasRole: () => false,
 });
 
-// Mock user for demo purposes
-const MOCK_USER: User = {
-  id: '1',
-  name: 'John Doe',
-  email: 'john.doe@example.com',
-  token: 'mock-token-12345',
-  roles: ['user', 'bdx_analyst'],
-  tenant: 'smartbdx-dev',
-  expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
-};
+// Mock user removed - real Azure AD integration required
 
 // Provider component that wraps the app and makes auth available
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
@@ -65,17 +56,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const login = async () => {
-    // In a real implementation, this would redirect to Azure AD login
-    // and handle the authentication flow
+    // Real Azure AD integration required
     setIsLoading(true);
     
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // For demo purposes, use mock user
-    setUser(MOCK_USER);
-    localStorage.setItem('smartbdx_user', JSON.stringify(MOCK_USER));
-    setIsLoading(false);
+    // TODO: Implement real Azure AD login
+    // This would typically use MSAL library to redirect to Azure AD
+    throw new Error('Azure AD integration not implemented - mock login removed');
   };
 
   const logout = () => {
@@ -89,16 +75,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const refreshToken = async () => {
-    // TODO: Implement Azure AD token refresh
-    // For now, extend mock token expiry
-    if (user) {
-      const updatedUser = {
-        ...user,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
-      };
-      setUser(updatedUser);
-      localStorage.setItem('smartbdx_user', JSON.stringify(updatedUser));
-    }
+    // TODO: Implement real Azure AD token refresh
+    throw new Error('Azure AD token refresh not implemented - mock refresh removed');
   };
 
   const hasRole = (role: string) => {

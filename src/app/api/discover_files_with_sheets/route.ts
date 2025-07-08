@@ -1,14 +1,5 @@
 import { NextRequest } from 'next/server';
-import { z } from 'zod';
 import { DatabricksClient, createSuccessResponse, createErrorResponse } from '@/lib/databricks-client';
-import { mockFilesData } from '@/lib/mock-data/files';
-
-// FIXED: Add proper TypeScript types
-interface DiscoverFilesParameters {
-  volume_folder?: string;
-  include_metadata?: boolean;
-  max_files?: number;
-}
 
 interface FileWithSheets {
   id: string;
@@ -29,12 +20,12 @@ interface DatabricksResponse {
   error?: string;
 }
 
-// FIXED: Add input validation schema
-const parametersSchema = z.object({
-  volume_folder: z.string().optional(),
-  include_metadata: z.boolean().optional(),
-  max_files: z.number().min(1).max(1000).optional()
-});
+// Add simple TypeScript interface for parameters
+interface DiscoverFilesParameters {
+  volume_folder?: string;
+  include_metadata?: boolean;
+  max_files?: number;
+}
 
 export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
@@ -45,40 +36,56 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const { parameters = {} } = body;
     
-    // FIXED: Validate input parameters
-    const validatedParameters = parametersSchema.safeParse(parameters);
-    if (!validatedParameters.success) {
-      console.error(`[${requestId}] ❌ Invalid parameters:`, validatedParameters.error);
+    // Simple parameter validation
+    const validatedParameters = parameters as DiscoverFilesParameters;
+    
+    // Basic validation
+    if (validatedParameters.max_files && (validatedParameters.max_files < 1 || validatedParameters.max_files > 1000)) {
+      console.error(`[${requestId}] ❌ Invalid max_files parameter:`, validatedParameters.max_files);
       return createErrorResponse(
-        'Invalid parameters: ' + validatedParameters.error.issues.map(i => i.message).join(', '),
+        'Invalid max_files parameter: must be between 1 and 1000',
         requestId,
         400
       );
     }
 
-    // FIXED: Use server-only environment variable
-    if (process.env.USE_MOCK_DATA === 'true') {
-      console.log(`[${requestId}] 🧪 Using mock data`);
-      return createSuccessResponse(mockFilesData.discover_files_with_sheets);
+    // Execute real backend operation
+    console.log(`[${requestId}] 🚀 Executing Databricks operation with parameters:`, validatedParameters);
+    
+    const client = new DatabricksClient(requestId);
+    const result = await client.executeOperation('discover_files_with_sheets', validatedParameters);
+
+    console.log(`[${requestId}] 🔍 Raw result from executeOperation:`, JSON.stringify(result, null, 2));
+
+    // SPECIAL CASE: Databricks returns success:false but real data is in "error" field as JSON string
+    let processedResult = result;
+    if (result && result.success === false && result.error) {
+      try {
+        const errorParsed = JSON.parse(result.error);
+        if (errorParsed && errorParsed.success === true) {
+          console.log(`[${requestId}] 🔄 Found real data in error field, using parsed data`);
+          processedResult = errorParsed;
+        }
+      } catch (e) {
+        console.log(`[${requestId}] ❌ Failed to parse error field as JSON, treating as actual error`);
+      }
     }
 
-    // FIXED: Simplified Databricks interaction
-    const client = new DatabricksClient(requestId);
-    const result = await client.executeOperation('discover_files_with_sheets', validatedParameters.data);
-
     // FIXED: Standardized response handling
-    const processedResult = parseStandardizedResponse(result, requestId);
+    const finalResult = parseStandardizedResponse(processedResult, requestId);
     
-    if (processedResult.success) {
-      console.log(`[${requestId}] ✅ Operation successful`);
-      return createSuccessResponse(processedResult.data);
+    console.log(`[${requestId}] 🔍 Processed result:`, JSON.stringify(processedResult, null, 2));
+    
+    if (finalResult.success) {
+      console.log(`[${requestId}] ✅ Operation successful - returning data:`, finalResult.data);
+      return createSuccessResponse(finalResult.data);
     } else {
-      console.error(`[${requestId}] ❌ Operation failed:`, processedResult.error);
+      console.error(`[${requestId}] ❌ Operation failed:`, finalResult.error);
       return createErrorResponse(
-        processedResult.error || 'Operation failed',
+        finalResult.error || 'Operation failed',
         requestId,
         500,
-        { operation: 'discover_files_with_sheets' }
+        { operation: 'discover_files_with_sheets', debug_result: result }
       );
     }
 
@@ -89,26 +96,42 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// FIXED: Centralized response parsing logic
+// FIXED: Centralized response parsing logic with enhanced debugging
 function parseStandardizedResponse(result: any, requestId: string): DatabricksResponse {
+  console.log(`[${requestId}] 🔍 Parsing response of type: ${typeof result}`);
+  
   try {
     // Handle string responses
     if (typeof result === 'string') {
+      console.log(`[${requestId}] 📝 Processing string response: ${result.substring(0, 200)}...`);
       try {
         result = JSON.parse(result);
+        console.log(`[${requestId}] ✅ Successfully parsed JSON from string`);
       } catch (e) {
-        console.error(`[${requestId}] ❌ Invalid JSON string response`);
-        return { success: false, error: 'Invalid response format' };
+        console.error(`[${requestId}] ❌ Invalid JSON string response:`, e);
+        return { success: false, error: `Invalid JSON response format: ${e}` };
       }
     }
 
     // Handle null/undefined
     if (!result) {
+      console.log(`[${requestId}] ⚠️ Empty/null response from Databricks`);
       return { success: false, error: 'Empty response from Databricks' };
     }
 
+    // Log the structure we're working with
+    console.log(`[${requestId}] 🔍 Response structure:`, {
+      hasSuccess: 'success' in result,
+      successValue: result.success,
+      hasData: 'data' in result,
+      dataType: typeof result.data,
+      isArray: Array.isArray(result),
+      keys: Object.keys(result)
+    });
+
     // Handle explicit success/failure
     if (typeof result.success === 'boolean') {
+      console.log(`[${requestId}] ✅ Found explicit success field: ${result.success}`);
       return {
         success: result.success,
         data: result.success ? result.data : undefined,
@@ -116,19 +139,39 @@ function parseStandardizedResponse(result: any, requestId: string): DatabricksRe
       };
     }
 
-    // REMOVED: Dangerous error field parsing
+    // Handle warning responses (from our enhanced Databricks client)
+    if (result.warning) {
+      console.log(`[${requestId}] ⚠️ Got warning response, treating as success:`, result.warning);
+      return {
+        success: true,
+        data: result.data || []
+      };
+    }
+
     // If no explicit success field, assume success if we have data
     if (result.data || Array.isArray(result)) {
+      console.log(`[${requestId}] ✅ No explicit success field, but found data - treating as success`);
       return {
         success: true,
         data: result.data || result
       };
     }
 
-    return { success: false, error: 'Unexpected response structure' };
+    // Check for common Databricks response patterns
+    if (result.file_name || result.files || result.discovered_files) {
+      console.log(`[${requestId}] ✅ Found file data pattern - treating as success`);
+      return {
+        success: true,
+        data: result.files || result.discovered_files || [result]
+      };
+    }
+
+    // Log the unexpected structure for debugging
+    console.error(`[${requestId}] ❌ Unexpected response structure:`, JSON.stringify(result, null, 2));
+    return { success: false, error: `Unexpected response structure. Keys: ${Object.keys(result).join(', ')}` };
 
   } catch (error) {
     console.error(`[${requestId}] ❌ Error parsing response:`, error);
-    return { success: false, error: 'Failed to parse response' };
+    return { success: false, error: `Failed to parse response: ${error}` };
   }
 }

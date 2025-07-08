@@ -16,8 +16,8 @@ interface PendingRequest {
 }
 
 const pendingRequests: Record<string, PendingRequest> = {};
-const PENDING_REQUEST_TTL = 3000; // 3 seconds TTL for pending requests (increased for Databricks)
-const PROCESS_FILES_TTL = 10000; // 10 seconds TTL for process_files operations (longer to prevent duplicates)
+const PENDING_REQUEST_TTL = 1000; // 1 second TTL for pending requests (reduced to allow more frequent requests)
+const PROCESS_FILES_TTL = 2000; // 2 seconds TTL for process_files operations (reduced to prevent blocking)
 
 // Generate a cache key for a request
 function getRequestCacheKey(endpoint: string, options: RequestInit): string {
@@ -34,10 +34,10 @@ function getRequestCacheKey(endpoint: string, options: RequestInit): string {
       } else if (endpoint === '/smart_file_selection') {
         body = 'smart_selection';
       } else if (endpoint === '/process_files') {
-        // For process_files, create a normalized key based on selected files only
-        // This prevents duplicate submissions with same files even if timing differs
+        // For process_files, include timestamp to allow rapid submissions
         const fileIds = parsedBody.parameters?.files?.map((f: any) => f.fileId).sort().join(',') || '';
-        body = `process_files:${fileIds}`;
+        const timestamp = Math.floor(Date.now() / 2000); // 2-second buckets for deduplication
+        body = `process_files:${fileIds}:${timestamp}`;
       } else {
         body = JSON.stringify(parsedBody);
       }
@@ -182,56 +182,4 @@ export async function apiRequest<T>(
   return requestPromise as Promise<T>;
 }
 
-// Mock data function
-function getMockData(endpoint: string): any {
-  if (endpoint === '/files') {
-    return [
-      { id: 'sample1', name: 'sample1.xlsx', status: 'ready', size: 1024000, lastModified: new Date() },
-      { id: 'sample2', name: 'sample2.xlsx', status: 'processing', size: 2048000, lastModified: new Date() },
-      {
-        id: 'bdx1',
-        name: 'Bordereaux_Claims_Q1_2024.xlsx',
-        status: 'ready',
-        size: 1024 * 27,
-        lastModified: new Date('2024-04-10'),
-      },
-      {
-        id: 'bdx2',
-        name: 'Bordereaux_Premium_Q1_2024.xlsx',
-        status: 'ready',
-        size: 1024 * 33,
-        lastModified: new Date('2024-04-12'),
-      },
-    ];
-  }
-  
-  if (endpoint.includes('/files/') && endpoint.includes('/sheets')) {
-    const fileId = endpoint.split('/')[2];
-    
-    const mockSheets: Record<string, string[]> = {
-      'sample1': ['Sheet1', 'Sheet2', 'Sheet3'],
-      'sample2': ['Sheet1', 'Sheet2'],
-      'bdx1': ['Claims Data', 'Claim Details', 'Claim Summary', 'Claim Analysis'],
-      'bdx2': ['Premium Data', 'Premium Details', 'Premium Summary', 'Premium Analysis'],
-    };
-    
-    return mockSheets[fileId] || ['Sheet1', 'Sheet2', 'Sheet3'];
-  }
-  
-  if (endpoint === '/jobs') {
-    return [
-      { id: 'job-1', jobId: 'job-1', status: 'processing', progress: 45, fileName: 'sample1.xlsx' },
-      { id: 'job-2', jobId: 'job-2', status: 'completed', progress: 100, fileName: 'sample2.xlsx' },
-    ];
-  }
-  
-  if (endpoint.includes('/jobs/') && endpoint.includes('/status')) {
-    return { status: 'processing', progress: 45, jobId: 'job-123' };
-  }
-  
-  if (endpoint === '/process') {
-    return { jobId: 'job-123', status: 'submitted' };
-  }
-  
-  return {};
-}
+// Mock data removed - all data must come from real backend APIs

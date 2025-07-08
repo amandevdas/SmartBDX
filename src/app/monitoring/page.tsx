@@ -25,74 +25,17 @@ const MonitoringPage = () => {
 
   useEffect(() => {
     setLoading(true);
-    // In a real implementation, fetch data from API
-    // fetch('/api/batches')
-    //   .then(res => res.json())
-    //   .then(data => {
-    //     setBatches(data);
-    //     setLoading(false);
-    //   })
-    //   .catch(err => {
-    //     setError(err);
-    //     setLoading(false);
-    //   });
-
-    // For demo purposes, simulate API call with mock data
-    setTimeout(() => {
-      const mockBatches: BatchSummary[] = [
-        {
-          id: "batch-001",
-          startTime: "2023-12-15T10:30:00Z",
-          endTime: "2023-12-15T11:45:00Z",
-          status: "completed",
-          totalFiles: 20,
-          completedFiles: 20,
-          errorCount: 0,
-          processingTime: 4500, // 1 hour 15 minutes
-        },
-        {
-          id: "batch-002",
-          startTime: "2023-12-16T14:20:00Z",
-          endTime: "2023-12-16T15:10:00Z",
-          status: "failed",
-          totalFiles: 15,
-          completedFiles: 8,
-          errorCount: 7,
-          processingTime: 3000, // 50 minutes
-        },
-        {
-          id: "batch-003",
-          startTime: "2023-12-17T09:00:00Z",
-          status: "processing",
-          totalFiles: 25,
-          completedFiles: 12,
-          errorCount: 2,
-          processingTime: 3600, // 1 hour so far
-        },
-        {
-          id: "batch-004",
-          startTime: "2023-12-18T11:15:00Z",
-          status: "paused",
-          totalFiles: 18,
-          completedFiles: 5,
-          errorCount: 1,
-          processingTime: 1800, // 30 minutes so far
-        },
-        {
-          id: "batch-005",
-          startTime: "2023-12-19T08:45:00Z",
-          endTime: "2023-12-19T10:30:00Z",
-          status: "completed",
-          totalFiles: 30,
-          completedFiles: 30,
-          errorCount: 3,
-          processingTime: 6300, // 1 hour 45 minutes
-        },
-      ];
-      
-      setBatches(mockBatches);
-      setLoading(false);
-    }, 1000);
+    // Fetch real batch data from API
+    fetch('/api/batches')
+      .then(res => res.json())
+      .then(data => {
+        setBatches(data.data || []);
+        setLoading(false);
+      })
+      .catch(err => {
+        setError(err);
+        setLoading(false);
+      });
   }, []);
 
   // Calculate summary statistics

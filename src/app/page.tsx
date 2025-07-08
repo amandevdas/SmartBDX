@@ -7,8 +7,8 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    // Redirect to the dashboard
-    router.push("/dashboard");
+    // Redirect to the selection page
+    router.push("/selection");
   }, [router]);
 
   return (

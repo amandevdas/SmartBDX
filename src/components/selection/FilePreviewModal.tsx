@@ -50,44 +50,22 @@ export const FilePreviewModal = ({ file, visible, onClose }: FilePreviewModalPro
         clearTimeout(timeoutRef.current);
       }
       
-      // In a real implementation, fetch preview data from API
-      // fetch(`/api/files/${file.id}/preview`)
-      //   .then(res => res.json())
-      //   .then(data => {
-      //     setSheets(data.sheets);
-      //     setLoading(false);
-      //   })
-      //   .catch(err => {
-      //     setError("Failed to load preview data");
-      //     setLoading(false);
-      //   });
-        
-      // For demo purposes, simulate API call with mock data
-      timeoutRef.current = setTimeout(() => {
-        const mockSheets = [
-          {
-            name: "Sheet1",
-            columns: ["Policy Number", "Insured Name", "Premium", "Inception Date", "Expiry Date"],
-            rows: [
-              { key: "1", "Policy Number": "POL001", "Insured Name": "Acme Corp", "Premium": "$1,200", "Inception Date": "2023-01-01", "Expiry Date": "2024-01-01" },
-              { key: "2", "Policy Number": "POL002", "Insured Name": "XYZ Ltd", "Premium": "$950", "Inception Date": "2023-02-15", "Expiry Date": "2024-02-15" },
-              { key: "3", "Policy Number": "POL003", "Insured Name": "ABC Inc", "Premium": "$1,500", "Inception Date": "2023-03-10", "Expiry Date": "2024-03-10" },
-            ]
-          },
-          {
-            name: "Sheet2",
-            columns: ["Claim ID", "Policy Number", "Claim Amount", "Date Reported"],
-            rows: [
-              { key: "1", "Claim ID": "CLM001", "Policy Number": "POL001", "Claim Amount": "$500", "Date Reported": "2023-06-15" },
-              { key: "2", "Claim ID": "CLM002", "Policy Number": "POL003", "Claim Amount": "$750", "Date Reported": "2023-07-20" },
-            ]
+      // Fetch real preview data from API
+      fetch(`/api/files/${file.id}/preview`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            setSheets(data.data.sheets || []);
+          } else {
+            setError(data.error || "Failed to load preview data");
           }
-        ];
-        
-        setSheets(mockSheets);
-        setLoading(false);
-        timeoutRef.current = null;
-      }, 1000);
+          setLoading(false);
+        })
+        .catch(err => {
+          console.error('Preview API error:', err);
+          setError("Failed to load preview data from backend");
+          setLoading(false);
+        });
     }
   }, [visible, file]);
 

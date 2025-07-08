@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useState, useContext, ReactNode, useCallback, useEffect } from 'react';
-import { apiRequest } from '@/hooks/useApi';
+import { apiRequest } from '@/utils/apiHelpers';
 import { apiClient } from '@/services/api';
 import type { FileItem, JobStatus } from '@/types/api';
 import { message } from 'antd';
