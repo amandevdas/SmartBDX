@@ -5,6 +5,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Modal, Button, message, Spin, Row, Col, Alert, Popconfirm, Tabs } from 'antd';
 import { DeleteOutlined, ReloadOutlined, EyeOutlined } from '@ant-design/icons';
 import { usePolling, apiRequest } from '../../hooks/useApi';
+import { apiClient } from '@/services/api';
 import type { JobStatus, ProcessedFile } from '../../types/api';
 import { useAppContext } from '@/context/AppContext';
 import BatchCard from '@/components/processing/BatchCard';
@@ -131,41 +132,47 @@ export default function ProcessingPage() {
       (job.status === 'processing' || job.status === 'submitted') && job.batchId
     );
 
-    if (activeJobs.length === 0) return null;
+    if (activeJobs.length === 0) {
+      console.log('📊 No active jobs to poll');
+      return null;
+    }
 
     try {
       console.log(`🔄 Polling ${activeJobs.length} active jobs via Databricks...`);
       
-      // Get status updates for each active batch using the Databricks backend
+      // Get status updates for each active batch using the enhanced API client
       const updates = await Promise.all(
         activeJobs.map(async (job) => {
           try {
-            const response = await apiRequest<{data: any}>(`/get_batch_status/${job.batchId}`);
+            const statusData = await apiClient.getBatchStatus(job.batchId!);
             
-            const data = response?.data || response;
-            return {
+            // Check if job is completed to stop polling
+            const isCompleted = ['completed', 'error', 'cancelled'].includes(statusData.status);
+            
+            const update = {
               jobId: job.jobId,
               batchId: job.batchId,
-              status: data.status || job.status,
-              progress: data.progress || ('progress' in job ? job.progress : 0),
-              message: data.current_file || data.message || job.message,
-              // Enhanced backend data
-              rate_limit_status: data.rate_limit_status,
-              checkpoint_data: data.checkpoint_data,
-              cost_estimate: data.cost_estimate,
-              cache_utilization: data.cache_utilization,
-              completed_files: data.completed_files,
-              total_files: data.total_files,
-              current_file: data.current_file
+              status: statusData.status,
+              progress: 'progress' in statusData ? statusData.progress : undefined,
+              message: statusData.message,
+              endTime: 'endTime' in statusData ? statusData.endTime : undefined,
+              error: 'error' in statusData ? statusData.error : undefined
             };
+            
+            if (isCompleted) {
+              console.log(`✅ Job ${job.jobId} completed with status: ${statusData.status}`);
+            }
+            
+            return update;
           } catch (error) {
             console.warn(`Failed to get status for batch ${job.batchId}:`, error);
             return {
               jobId: job.jobId,
               batchId: job.batchId,
-              status: job.status,
-              progress: ('progress' in job ? job.progress : 0),
-              message: job.message
+              status: 'error' as const,
+              message: 'Failed to get status',
+              endTime: new Date().toISOString(),
+              error: error instanceof Error ? error.message : 'Status check failed'
             };
           }
         })
@@ -179,10 +186,11 @@ export default function ProcessingPage() {
     }
   }, []); // FIXED: Removed jobs dependency to prevent function recreation
 
-  const shouldPoll = useMemo(() => 
-    jobs.some(job => job.status === 'processing' || job.status === 'submitted'),
-    [jobs]
-  );
+  const shouldPoll = useMemo(() => {
+    const hasActiveJobs = jobs.some(job => job.status === 'processing' || job.status === 'submitted');
+    console.log(`📊 Should poll: ${hasActiveJobs} (${jobs.filter(job => job.status === 'processing' || job.status === 'submitted').length} active jobs)`);
+    return hasActiveJobs;
+  }, [jobs]);
 
   const { data: statusData, error: pollingError } = usePolling(
     pollingFetcher,
@@ -194,8 +202,16 @@ export default function ProcessingPage() {
     if (statusData && Array.isArray(statusData)) {
       statusData.forEach(update => {
         if (update && update.jobId) {
-          // The update from the bulk API should match Partial<JobStatus> & { jobId: string }
+          // Update job status and check for completion
           updateJob(update);
+          
+          // Check if job completed and should navigate to mapping
+          const isCompleted = ['completed', 'error', 'cancelled'].includes(update.status);
+          if (isCompleted && update.status === 'completed') {
+            console.log(`✅ Job ${update.jobId} completed - mapping may be available`);
+            // You could add navigation logic here if needed
+            // For now, just log completion
+          }
         }
       });
     }

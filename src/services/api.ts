@@ -12,68 +12,63 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
  * SmartBDX API client - Only backend-supported operations
  * Backend supports exactly 6 operations from SmartBDX_API_Gateway_v3.py
  */
+/**
+ * Enhanced API client with proper error handling and response format handling
+ */
 export const apiClient = {
-  // === OPERATION 1: DISCOVER FILES WITH SHEETS ===
-  
   /**
-   * Discover files with sheets metadata
-   * Maps to: discover_files_with_sheets backend operation
+   * Internal method to handle API calls with proper error handling
    */
-  async discoverFilesWithSheets(): Promise<FileItem[]> {
-    console.log('🔍 API Client: Discovering files with sheets from backend...');
-    
+  async call<T>(operation: string, parameters: any = {}): Promise<T> {
     try {
-      const response = await apiRequest<any>('/discover_files_with_sheets', {
+      console.log(`🔍 API Client: Calling ${operation} with parameters:`, parameters);
+      
+      const response = await apiRequest<any>(`/${operation}`, {
         method: 'POST',
-        body: JSON.stringify({
-          parameters: {
-            volume_folder: '/Volumes/test/bronze/raw/'
-          }
-        })
+        body: JSON.stringify({ parameters })
       });
       
-      console.log('🔍 API Client: Raw response:', response);
+      console.log(`📊 API Client: Raw response from ${operation}:`, response);
       
-      // Handle different response formats more robustly
-      let filesData: any[] = [];
-      
-      // Case 1: Response is directly an array
-      if (Array.isArray(response)) {
-        console.log('📦 API Client: Response is direct array');
-        filesData = response;
-      }
-      // Case 2: Response has data property with array
-      else if (response?.data && Array.isArray(response.data)) {
-        console.log('📦 API Client: Response has data array');
-        filesData = response.data;
-      }
-      // Case 3: Response has success flag and data
-      else if (response?.success && response?.data) {
-        console.log('📦 API Client: Response has success flag');
-        filesData = Array.isArray(response.data) ? response.data : [response.data];
-      }
-      // Case 4: Response looks like a single file object
-      else if (response?.file_name || response?.name) {
-        console.log('📦 API Client: Response is single file object');
-        filesData = [response];
-      }
-      // Case 5: Warning response with empty data
-      else if (response?.warning) {
-        console.log('⚠️ API Client: Got warning response:', response.warning);
-        filesData = response.data || [];
-      }
-      // Case 6: Raw response that might be files
-      else if (response && typeof response === 'object') {
-        console.log('📦 API Client: Attempting to parse object response');
-        // Try to extract files from various possible structures
-        const possibleFiles = response.files || response.discovered_files || response.results || [];
-        filesData = Array.isArray(possibleFiles) ? possibleFiles : [];
+      // Handle backend wrapper structure
+      if (response?.success === false) {
+        throw new Error(response.error || `${operation} failed`);
       }
       
-      console.log(`🔍 API Client: Extracted ${filesData.length} files from response`);
+      // Extract data from wrapper structure
+      if (response?.success && response?.data) {
+        console.log(`✅ API Client: Successfully extracted data from ${operation}`);
+        return response.data;
+      }
+      
+      // Handle direct response (fallback)
+      if (response && typeof response === 'object' && !response.success) {
+        console.log(`📦 API Client: Using direct response from ${operation}`);
+        return response;
+      }
+      
+      throw new Error(`Invalid response format from ${operation}`);
+      
+    } catch (error) {
+      console.error(`❌ API Client: Error in ${operation}:`, error);
+      throw error;
+    }
+  },
+
+  // === OPERATION 1: DISCOVER FILES WITH SHEETS ===
+  async discoverFilesWithSheets(): Promise<FileItem[]> {
+    try {
+      const data = await this.call<any[]>('discover_files_with_sheets', {
+        volume_folder: '/Volumes/test/bronze/raw/'
+      });
+      
+      if (!Array.isArray(data)) {
+        console.warn('📦 API Client: Expected array, got:', typeof data);
+        return [];
+      }
       
       // Transform and validate the files data
-      const validFiles = filesData
+      const validFiles = data
         .filter(file => file && (file.file_name || file.name))
         .map(file => ({
           id: file.id || file.file_name || file.name,
@@ -91,92 +86,62 @@ export const apiClient = {
       
     } catch (error) {
       console.error('❌ API Client: Error in discoverFilesWithSheets:', error);
-      
-      // Check if error has response data we can use
-      if (error instanceof Error && 'response' in error) {
-        console.log('🔍 API Client: Checking error response for data');
-      }
-      
-      // Return empty array instead of throwing to prevent UI crashes
-      console.log('🔄 API Client: Returning empty array due to error');
       return [];
     }
   },
 
   // === OPERATION 2: PROCESS FILES ===
-  
-  /**
-   * Submit processing job with mapping support
-   * Maps to: process_files backend operation
-   */
   async submitProcessingJob(request: ProcessRequest): Promise<{ jobId: string; status: string }> {
-    console.log('🚀 API Client: Submitting processing job with mapping...');
-    const response = await apiRequest<{data: {batch_id: string; status: string}}>('/process_files', {
-      method: 'POST',
-      body: JSON.stringify({
-        parameters: {
-          files: request.fileIds.map(fileId => ({
-            fileId,
-            sheets: request.sheetSelections?.[fileId] || []
-          })),
-          volume_folder: '/Volumes/test/bronze/raw/',
-          enable_mapping: request.options?.enable_mapping || false
-        }
-      })
-    });
-    
-    // Transform response to match expected format
-    if (!response) {
-      throw new Error('No response from backend');
+    try {
+      const data = await this.call<any>('process_files', {
+        files: request.fileIds.map(fileId => ({
+          fileId,
+          sheets: request.sheetSelections?.[fileId] || []
+        })),
+        volume_folder: '/Volumes/test/bronze/raw/',
+        enable_mapping: request.options?.enable_mapping || false
+      });
+      
+      const jobId = data?.batch_id || data?.jobId || `batch-${Date.now()}`;
+      const status = data?.status || 'submitted';
+      
+      console.log(`✅ API Client: Job submitted successfully - ${jobId}`);
+      return { jobId, status };
+      
+    } catch (error) {
+      console.error('❌ API Client: Error in submitProcessingJob:', error);
+      throw error;
     }
-    
-    const data = response?.data || response;
-    const jobId = (data as any)?.batch_id || (data as any)?.jobId || `batch-${Date.now()}`;
-    const status = (data as any)?.status || 'submitted';
-    
-    return { jobId, status };
   },
 
   // === OPERATION 3: GET BATCH STATUS ===
-  
-  /**
-   * Get batch processing status
-   * Maps to: get_batch_status backend operation
-   */
   async getBatchStatus(batchId: string): Promise<JobStatus> {
-    console.log(`📊 API Client: Getting batch status for ${batchId}...`);
-    
     try {
-      const response = await apiRequest<{data: any}>(`/get_batch_status/${batchId}`);
-      const data = response?.data || response;
+      const data = await this.call<any>('get_batch_status', { batch_id: batchId });
       
-      if (!data) {
-        throw new Error('No data in batch status response');
-      }
+      // Check if batch is completed
+      const isCompleted = data.status === 'completed' || data.status === 'finished';
       
-      const jobStatus: any = {
+      const jobStatus: JobStatus = {
         jobId: data.batch_id || data.jobId || batchId,
-        status: data.status || 'processing',
+        status: this.mapBackendStatus(data.status || 'processing'),
         message: data.current_file || data.message || 'Processing...',
         batchId: data.batch_id || batchId,
         timestamp: data.start_time || data.timestamp || new Date().toISOString(),
-        endTime: data.end_time
-      };
-
-      // Add progress only for statuses that support it
-      if (data.status === 'processing' || data.status === 'paused') {
-        jobStatus.progress = Math.min(Math.max(data.progress || 0, 0), 100);
-      }
+        ...(data.end_time && { endTime: data.end_time }),
+        ...(data.progress !== undefined && { progress: Math.min(Math.max(data.progress, 0), 100) })
+      } as JobStatus;
 
       return jobStatus;
+      
     } catch (error) {
       console.warn(`Failed to get batch status for ${batchId}:`, error);
-      // Return a minimal valid JobStatus instead of throwing
+      // Return error status instead of throwing
       return {
         jobId: batchId,
         status: 'error',
         endTime: new Date().toISOString(),
-        error: 'Failed to get status from backend',
+        error: error instanceof Error ? error.message : 'Failed to get status from backend',
         message: 'Failed to get status from backend',
         batchId: batchId,
         timestamp: new Date().toISOString()
@@ -184,44 +149,62 @@ export const apiClient = {
     }
   },
 
-  // === OPERATION 4: RESUME FAILED BATCH ===
-  
   /**
-   * Resume failed batch processing
-   * Maps to: resume_failed_batch backend operation
+   * Map backend status values to frontend status values
    */
+  mapBackendStatus(backendStatus: string): 'submitted' | 'processing' | 'completed' | 'error' | 'paused' | 'cancelled' {
+    switch (backendStatus?.toLowerCase()) {
+      case 'completed':
+      case 'finished':
+      case 'success':
+        return 'completed';
+      case 'processing':
+      case 'running':
+      case 'in_progress':
+        return 'processing';
+      case 'submitted':
+      case 'queued':
+        return 'submitted';
+      case 'paused':
+      case 'suspended':
+        return 'paused';
+      case 'cancelled':
+      case 'canceled':
+      case 'stopped':
+        return 'cancelled';
+      case 'error':
+      case 'failed':
+      case 'failure':
+      default:
+        return 'error';
+    }
+  },
+
+  // === OPERATION 4: RESUME FAILED BATCH ===
   async resumeFailedBatch(batchId: string): Promise<any> {
-    console.log(`🔄 API Client: Resuming failed batch ${batchId}...`);
-    return apiRequest('/databricks', {
-      method: 'POST',
-      body: JSON.stringify({
-        operation: 'resume_failed_batch',
-        parameters: { batch_id: batchId }
-      })
-    });
+    try {
+      return await this.call<any>('resume_failed_batch', { batch_id: batchId });
+    } catch (error) {
+      console.error(`❌ API Client: Error resuming batch ${batchId}:`, error);
+      throw error;
+    }
   },
 
   // === OPERATION 5: GET MAPPING RESULTS ===
-  
-  /**
-   * Get mapping results for review
-   * Maps to: get_mapping_results backend operation
-   */
   async getMappingResults(batchId?: string, status?: string): Promise<any> {
-    console.log(`🗂️ API Client: Getting mapping results...`);
-    const params = new URLSearchParams();
-    if (batchId) params.set('batch_id', batchId);
-    if (status) params.set('status', status);
-    
-    return apiRequest(`/mapping?${params.toString()}`);
+    try {
+      const params: any = {};
+      if (batchId) params.batch_id = batchId;
+      if (status) params.status = status;
+      
+      return await this.call<any>('get_mapping_results', params);
+    } catch (error) {
+      console.error('❌ API Client: Error getting mapping results:', error);
+      throw error;
+    }
   },
 
   // === OPERATION 6: APPROVE MAPPINGS ===
-  
-  /**
-   * Approve or reject mapping results
-   * Maps to: approve_mappings backend operation
-   */
   async approveMappings(approvalData: {
     file_name: string;
     sheet_name: string;
@@ -229,19 +212,15 @@ export const apiClient = {
     rejected_mappings: any[];
     reviewed_by: string;
   }): Promise<any> {
-    console.log(`✅ API Client: Approving mappings for ${approvalData.file_name}...`);
-    return apiRequest('/mapping', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(approvalData)
-    });
+    try {
+      return await this.call<any>('approve_mappings', approvalData);
+    } catch (error) {
+      console.error(`❌ API Client: Error approving mappings for ${approvalData.file_name}:`, error);
+      throw error;
+    }
   },
 
-  // === LEGACY COMPATIBILITY (MINIMAL) ===
-  
-  /**
-   * @deprecated Use discoverFilesWithSheets instead
-   */
+  // === LEGACY COMPATIBILITY ===
   async getFiles(): Promise<FileItem[]> {
     return this.discoverFilesWithSheets();
   }

@@ -37,23 +37,35 @@ const MappingPage = () => {
   useEffect(() => {
     const loadMappingFiles = async () => {
       setLoading(true);
+      setError(null);
+      
       try {
         const response = await fetch('/api/mapping?status=all');
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
         const result = await response.json();
         
-        if (result.success && result.data.files_summary) {
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to load mapping files');
+        }
+        
+        if (result.data?.files_summary && Array.isArray(result.data.files_summary)) {
           // Transform backend data to UI format
           const transformedFiles: MappingFile[] = result.data.files_summary.map((file: any) => ({
             id: `${file.file_name}_${file.sheet_name}`,
             file_name: `${file.file_name}/${file.sheet_name}`,
-            status: file.status,
-            confidence: file.high_confidence / file.total_columns,
-            column_count: file.total_columns,
-            mapped_columns: file.total_columns - file.needs_review,
+            status: file.status || 'pending',
+            confidence: file.total_columns > 0 ? (file.high_confidence || 0) / file.total_columns : 0,
+            column_count: file.total_columns || 0,
+            mapped_columns: (file.total_columns || 0) - (file.needs_review || 0),
             last_modified: new Date().toISOString().split('T')[0]
           }));
           setFiles(transformedFiles);
         } else {
+          console.warn('No files_summary in response:', result);
           setFiles([]);
         }
       } catch (err) {
@@ -73,23 +85,39 @@ const MappingPage = () => {
     setMappingLoading(true);
     setMappingModalVisible(true);
     setSelectedMappings([]);
+    setError(null);
     
     try {
       // Extract file_name and sheet_name from the combined id
       const [fileName, sheetName] = file.file_name.split('/');
-      const response = await fetch(`/api/mapping?file_name=${fileName}&sheet_name=${sheetName}&status=pending`);
+      
+      if (!fileName || !sheetName) {
+        throw new Error('Invalid file format - cannot extract file and sheet names');
+      }
+      
+      const response = await fetch(`/api/mapping?file_name=${encodeURIComponent(fileName)}&sheet_name=${encodeURIComponent(sheetName)}&status=pending`);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
       const result = await response.json();
       
-      if (result.success && result.data.mappings) {
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to load mapping details');
+      }
+      
+      if (result.data?.mappings && Array.isArray(result.data.mappings)) {
         // Transform backend mappings to UI format
         const transformedMappings: ColumnMapping[] = result.data.mappings.map((mapping: any) => ({
-          source_column: mapping.source_column,
-          target_column: mapping.target_column,
-          confidence: mapping.confidence,
-          examples: mapping.sample_values || []
+          source_column: mapping.source_column || '',
+          target_column: mapping.target_column || '',
+          confidence: mapping.confidence || 0,
+          examples: mapping.sample_values || mapping.examples || []
         }));
         setMappings(transformedMappings);
       } else {
+        console.warn('No mappings found in response:', result);
         setMappings([]);
       }
     } catch (err) {
